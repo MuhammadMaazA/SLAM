@@ -1,0 +1,41 @@
+# Large datasets
+datasets/
+extracted_data/
+coursework_deliverables/
+
+# Build files
+build/
+cmake*/
+
+# Large files
+*.zip
+*.mp4
+*.avi
+*.mov
+*.tar.gz
+*.jsonl
+*.db
+
+# Git LFS installation files
+git-lfs-*/
+git-lfs-*.tar.gz
+
+# MacOS files
+.DS_Store
+
+# Temporary files
+*.tmp
+*.temp
+
+# Log files
+*.log
+gc.log
+
+# IDE files
+.vscode/
+.idea/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
