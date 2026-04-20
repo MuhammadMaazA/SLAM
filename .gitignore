@@ -1,7 +1,32 @@
+# Documentation (local notes, not for repo)
+documentation/
+
 # Large datasets
 datasets/
 extracted_data/
-coursework_deliverables/
+
+# Generated outputs
+graphify-out/
+sequence_videos/
+lecture_materials/
+results/
+
+# UCL-provided course materials and tools (not student code)
+COMP0222_25-26/
+Coursework\ 2/
+
+# Raw part2 sequences / large sensor data (not code)
+coursework_deliverables/data/part2_sequences/
+coursework_deliverables/data/part1_analysis/dataset/
+coursework_deliverables/data/part1_analysis/KITTI_07/
+coursework_deliverables/data/part1_analysis/rgbd_dataset_freiburg1_xyz/
+coursework_deliverables/data/colmap_analysis/
+coursework_deliverables/data/colmap_comprehensive_analysis/
+
+# Assistant notes (not coursework)
+CLAUDE.md
+coursework_deliverables/CLAUDE.md
+
 
 # Build files
 build/
