@@ -1,0 +1,153 @@
+# SLAM Coursework - Submission Ready .gitignore
+
+# ==================================================
+# SENSITIVE DATA - DO NOT COMMIT
+# ==================================================
+
+# Personal Information
+**/personal/
+**/private/
+**/credentials/
+**/*_personal.*
+**/*_private.*
+
+# API Keys and Credentials
+*.key
+*.pem
+*.p12
+*.pfx
+**/api_keys/
+**/secrets/
+.env
+.env.*
+
+# ==================================================
+# LARGE DATASET FILES - TOO BIG FOR GIT
+# ==================================================
+
+# Raw Image Datasets (keep only essential samples)
+**/KITTI_07/image_0/
+**/KITTI_07_images/
+**/dataset/sequences/*/image_0/
+**/dataset_additional/sequences/*/image_0/
+
+# RGB Image Sequences (keep only metadata and samples)
+**/rgb/frame_*.jpg
+**/rgb/frame_*.png
+**/camera/rgb/
+**/Washroom/camera/rgb/
+**/Basement_2/camera/rgb/
+**/outdoor1_dataset/rgb/
+**/floor7_dataset/rgb/
+**/basement1_dataset/rgb/
+**/basement2_dataset/rgb/
+
+# Large TUM Dataset Files
+**/rgbd_dataset_freiburg1_xyz/rgb/
+**/rgbd_dataset_freiburg1_xyz/depth/
+
+# ==================================================
+# PROCESSING OUTPUT - CAN BE REGENERATED
+# ==================================================
+
+# ORB-SLAM2 Binary Output
+*.txt.orig
+*.txt.backup
+**/KeyFrameTrajectory*.txt
+**/CameraTrajectory*.txt
+**/MapPointTrajectory*.txt
+
+# COLMAP Processing Files
+**/colmap_*/database.db
+**/colmap_*/images.txt
+**/colmap_*/cameras.txt
+**/colmap_*/points3D.txt
+**/colmap_*/project.ini
+**/colmap_*/sparse/
+**/colmap_*/dense/
+
+# Temporary Processing Files
+**/*_temp.*
+**/*_tmp.*
+**/tmp/
+**/temp/
+**/.tmp/
+
+# ==================================================
+# SYSTEM FILES
+# ==================================================
+
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ==================================================
+# BACKUP AND LOG FILES
+# ==================================================
+
+# Log Files
+*.log
+*.log.*
+**/logs/
+**/log/
+
+# Backup Files
+*.bak
+*.backup
+*~
+*.orig
+
+# ==================================================
+# SUBMISSION GUIDELINES
+# ==================================================
+
+# Include only:
+# - Code implementations (.py, .yaml configs)
+# - Analysis results (.csv, .png plots) 
+# - Documentation (.md, .txt reports)
+# - Sample images (max 10-20 per sequence)
+# - Trajectory files (.txt results)
+# - Configuration files (.yaml)
+
+# Exclude:
+# - Raw datasets (reference them instead)
+# - Large image sequences
+# - Temporary processing files
+# - Personal information
+# - Binary data > 100MB total

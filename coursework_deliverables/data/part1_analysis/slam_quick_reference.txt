@@ -1,0 +1,35 @@
+# SLAM Quick Reference Sheet
+============================================================
+
+## Key Equations
+
+**Camera Projection:**
+[u, v, 1]ᵀ = K × [X/Z, Y/Z, 1]ᵀ
+
+**Bundle Adjustment:**
+minimize Σᵢⱼ ||xᵢⱼ - π(Kⱼ, Rⱼ, tⱼ, Xᵢ)||²
+
+**ICP Point-to-Plane:**
+minimize Σᵢ [(Rpᵢ + t - qᵢ) · nᵢ]²
+
+**Pose Graph SLAM:**
+minimize Σᵢⱼ eᵢⱼ(xᵢ, xⱼ)ᵀ Ωᵢⱼ eᵢⱼ(xᵢ, xⱼ)
+
+## Common Parameters
+
+**ORB-SLAM:**
+- Features: 1000-2000
+- Keyframe threshold: 0.2m translation or 0.2 rad rotation
+- Loop closure similarity: 0.75
+
+**LiDAR SLAM:**
+- Correspondence threshold: 0.3-0.8m
+- ICP iterations: 10-20
+- Keyframe threshold: 0.1-0.4m
+
+## Evaluation Metrics
+
+**ATE:** Absolute Trajectory Error
+**RPE:** Relative Pose Error
+**RMSE:** Root Mean Square Error
+**Success Rate:** % of successful runs

@@ -1,0 +1,13 @@
+Sequence,Experiment,Trajectory Length (m),Total Keyframes,Avg Processing Time (s),Total Processing Time (s),Correspondence Threshold,Keyframe Distance Threshold,ICP Iterations
+Washroom,baseline,4.72,20,0.0096,4.79,0.5,0.2,10
+Washroom,exp_3a_correspondence_tight,4.33,20,0.0094,4.71,0.3,0.2,10
+Washroom,exp_3b_correspondence_loose,4.79,20,0.0087,4.34,0.8,0.2,10
+Washroom,exp_3c_keyframe_dense,4.51,20,0.0094,4.70,0.5,0.1,10
+Washroom,exp_3d_keyframe_sparse,4.62,16,0.0107,5.34,0.5,0.4,10
+Washroom,exp_3e_icp_iterations,4.73,20,0.0124,6.20,0.5,0.2,20
+Basement_2,baseline,7.96,20,0.0126,6.27,0.5,0.2,10
+Basement_2,exp_3a_correspondence_tight,8.20,20,0.0164,8.19,0.3,0.2,10
+Basement_2,exp_3b_correspondence_loose,8.02,20,0.0113,5.65,0.8,0.2,10
+Basement_2,exp_3c_keyframe_dense,8.57,20,0.0124,6.18,0.5,0.1,10
+Basement_2,exp_3d_keyframe_sparse,8.05,20,0.0104,5.20,0.5,0.4,10
+Basement_2,exp_3e_icp_iterations,7.99,20,0.0104,5.19,0.5,0.2,20

@@ -1,13 +1,12 @@
 # Documentation (local notes, not for repo)
 documentation/
 
-# Large datasets
+# Raw dataset zips (not coursework output)
 datasets/
-extracted_data/
+# Over GitHub 2GB LFS limit
+extracted_data/KITTI/dataset/sequences/00.zip
 
-# Generated outputs
-graphify-out/
-sequence_videos/
+# Scratch/temp
 lecture_materials/
 results/
 
@@ -32,16 +31,7 @@ coursework_deliverables/CLAUDE.md
 build/
 cmake*/
 
-# Large files
-*.zip
-*.mp4
-*.avi
-*.mov
-*.tar.gz
-*.jsonl
-*.db
-
-# Git LFS installation files
+# Git LFS installer archives (not needed in repo)
 git-lfs-*/
 git-lfs-*.tar.gz
 

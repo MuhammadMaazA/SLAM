@@ -1,0 +1,41 @@
+# SLAM Coursework Q&A\n========================================\n\n## Q1: How to tune ORB-SLAM2 parameters?\n\nKey parameters to tune:
+                1. **nFeatures**: Start with 1000, increase for complex scenes
+                2. **Tracking thresholds**: Adjust for camera motion speed
+                3. **Keyframe thresholds**: Balance map quality vs computation
+                4. **Loop closure similarity**: Higher = stricter matching
+                
+                Systematic approach:
+                - Establish baseline performance
+                - Vary one parameter at a time
+                - Use quantitative metrics (ATE/RPE)
+                - Consider computational constraints\n\n## Q2: What causes SLAM tracking failures?\n\nCommon failure modes:
+                1. **Insufficient features**: Low texture, lighting changes
+                2. **Fast motion**: Motion blur, lost correspondence
+                3. **Scale drift**: Monocular SLAM over long distances
+                4. **Loop closure failures**: Repetitive/ambiguous environments
+                
+                Solutions:
+                - Multi-threading for real-time performance
+                - Robust outlier rejection (RANSAC)
+                - Relocalization for tracking recovery
+                - Multiple sensors (stereo, IMU, LiDAR)\n\n## Q3: How to evaluate SLAM performance?\n\nEvaluation metrics:
+                1. **ATE**: Absolute trajectory accuracy vs ground truth
+                2. **RPE**: Relative pose consistency and drift
+                3. **Computational**: Processing time, memory usage
+                4. **Robustness**: Success rate, failure recovery
+                
+                Best practices:
+                - Align trajectories before comparison
+                - Report multiple statistics (RMSE, median, std)
+                - Test on diverse sequences/environments
+                - Consider real-time performance requirements\n\n## Q4: How to implement LiDAR SLAM?\n\nKey components:
+                1. **Point cloud preprocessing**: Filtering, downsampling
+                2. **ICP registration**: Point-to-plane preferred
+                3. **Keyframe management**: Distance/angle thresholds
+                4. **Loop closure**: Scan similarity metrics
+                
+                Parameter tuning:
+                - Correspondence threshold: 0.3-0.8m typical
+                - ICP iterations: 10-20 for accuracy/speed trade-off
+                - Keyframe frequency: Balance map quality vs memory
+                - Normal estimation: Use local neighborhoods (k=5-10)\n
