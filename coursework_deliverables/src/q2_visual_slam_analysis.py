@@ -14,14 +14,16 @@ import matplotlib.gridspec as gridspec
 import matplotlib.cm as cm
 import os
 
-BASE = "/home/mmaaz/SLAM/coursework_deliverables/data"
-ORB_DIR  = f"{BASE}/q2_results/orbslam_runs"
-COLMAP_DIR = f"{BASE}/q2_results/colmap_runs"
-OUT_DIR  = f"{BASE}/q2_results"
+_HERE    = os.path.dirname(os.path.abspath(__file__))
+_ROOT    = os.path.abspath(os.path.join(_HERE, '..'))
+BASE     = os.environ.get('SLAM_DATA', os.path.join(_ROOT, 'data'))
+ORB_DIR  = os.path.join(BASE, 'q2_results', 'orbslam_runs')
+COLMAP_DIR = os.path.join(BASE, 'q2_results', 'colmap_runs')
+OUT_DIR  = os.path.join(BASE, 'q2_results')
 os.makedirs(OUT_DIR, exist_ok=True)
 
-REC1 = "/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings"
-REC2 = "/home/mmaaz/SLAM/extracted_data/tmp_recordings2"
+REC1 = os.environ.get('SLAM_REC1', '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings')
+REC2 = os.environ.get('SLAM_REC2', '/home/mmaaz/SLAM/extracted_data/tmp_recordings2')
 
 # All 9 sequences with metadata
 SEQUENCES = {
@@ -58,6 +60,25 @@ def centre(traj):
 def arc_length(traj):
     pos = traj[:, 1:4]
     return float(np.sum(np.linalg.norm(np.diff(pos, axis=0), axis=1)))
+
+
+def closure_error(traj):
+    """
+    Ground-truth-free quality proxy: Euclidean distance between first and
+    last 3D pose of the ORB-SLAM2 output. Only meaningful for sequences
+    where the camera was physically returned to its starting point; for
+    open-ended trajectories the value is informative but not a quality
+    metric.
+    """
+    if traj is None or len(traj) < 2:
+        return float('nan')
+    return float(np.linalg.norm(traj[-1, 1:4] - traj[0, 1:4]))
+
+
+# Sequences where the camera was returned to (approximately) the start.
+# Used to annotate the closure-error metric as meaningful vs indicative.
+CLOSED_LOOP_SEQS = {'Basement_1', 'Basement_2', 'BikeStorage', 'BikeStorage2',
+                    'Floor7_Hallway', 'Washroom'}
 
 
 def load_colmap(seq_name):
@@ -252,7 +273,10 @@ def plot_q2b(trajs):
                 transform=ax.transAxes, fontsize=10, color='gray',
                 bbox=dict(boxstyle='round', facecolor='whitesmoke'))
 
-    out = f"{OUT_DIR}/q2b_colmap_vs_orbslam.png"
+    # NOTE: EVO-based ATE/rot comparison (with alignment + scaling) lives in
+    # `q2b_evo_comparison.py`. This figure intentionally uses a different
+    # filename so the two scripts do not overwrite each other.
+    out = f"{OUT_DIR}/q2b_summary_table.png"
     fig.savefig(out, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"  saved → {out}")
@@ -266,58 +290,85 @@ def plot_q2c(trajs):
     names  = list(trajs.keys())
     n_seqs = len(names)
 
-    path_lengths = [arc_length(trajs[n]) for n in names]
-    pose_counts  = [len(trajs[n]) for n in names]
-    durations    = [trajs[n][-1, 0] - trajs[n][0, 0] for n in names]
-    avg_speeds   = [path_lengths[i] / max(durations[i], 1) for i in range(n_seqs)]
-    colors       = [SEQUENCES[n]["color"] for n in names]
+    path_lengths  = [arc_length(trajs[n])                  for n in names]
+    pose_counts   = [len(trajs[n])                         for n in names]
+    durations     = [trajs[n][-1, 0] - trajs[n][0, 0]      for n in names]
+    avg_speeds    = [path_lengths[i] / max(durations[i], 1)
+                     for i in range(n_seqs)]
+    closure_errs  = [closure_error(trajs[n])               for n in names]
+    colors        = [SEQUENCES[n]["color"]                 for n in names]
+    is_closed     = [n in CLOSED_LOOP_SEQS                 for n in names]
 
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(2, 3, figsize=(22, 12))
     fig.suptitle("Q2c – ORB-SLAM2 Statistics Across All 9 Collected Sequences",
                  fontsize=14, fontweight='bold')
 
     x = np.arange(n_seqs)
     short_names = [n.replace("_", "\n") for n in names]
 
-    # Bar: path lengths
-    ax = axes[0, 0]
-    bars = ax.bar(x, path_lengths, color=colors, alpha=0.85)
-    ax.set_xticks(x); ax.set_xticklabels(short_names, fontsize=8)
-    ax.set_ylabel("Path Length (m)"); ax.set_title("ORB-SLAM2 Tracked Path Length")
-    for bar, val in zip(bars, path_lengths):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05,
-                f"{val:.1f}m", ha='center', va='bottom', fontsize=7)
-    ax.grid(True, alpha=0.3, axis='y')
+    def _bar(ax, vals, ylabel, title, fmt, pad):
+        bars = ax.bar(x, vals, color=colors, alpha=0.85)
+        ax.set_xticks(x); ax.set_xticklabels(short_names, fontsize=8)
+        ax.set_ylabel(ylabel); ax.set_title(title)
+        for bar, val in zip(bars, vals):
+            if val is not None and not np.isnan(val):
+                ax.text(bar.get_x() + bar.get_width()/2,
+                        bar.get_height() + pad,
+                        fmt.format(val), ha='center', va='bottom', fontsize=7)
+        ax.grid(True, alpha=0.3, axis='y')
+        return bars
 
-    # Bar: pose counts
-    ax = axes[0, 1]
-    bars = ax.bar(x, pose_counts, color=colors, alpha=0.85)
-    ax.set_xticks(x); ax.set_xticklabels(short_names, fontsize=8)
-    ax.set_ylabel("Number of Poses"); ax.set_title("ORB-SLAM2 Tracked Poses")
-    for bar, val in zip(bars, pose_counts):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 5,
-                str(val), ha='center', va='bottom', fontsize=7)
-    ax.grid(True, alpha=0.3, axis='y')
+    _bar(axes[0, 0], path_lengths, "Path Length (m)",
+         "ORB-SLAM2 Tracked Path Length", "{:.1f}m", 0.05)
+    _bar(axes[0, 1], pose_counts, "Number of Poses",
+         "ORB-SLAM2 Tracked Poses", "{:.0f}", 5)
+    _bar(axes[0, 2], durations, "Sequence Duration (s)",
+         "Sequence Duration Tracked by ORB-SLAM2", "{:.0f}s", 0.5)
+    _bar(axes[1, 0], avg_speeds, "Average Speed (m/s)",
+         "Average Camera Speed per Sequence", "{:.2f}", 0.002)
 
-    # Bar: duration
-    ax = axes[1, 0]
-    bars = ax.bar(x, durations, color=colors, alpha=0.85)
-    ax.set_xticks(x); ax.set_xticklabels(short_names, fontsize=8)
-    ax.set_ylabel("Sequence Duration (s)"); ax.set_title("Sequence Duration Tracked by ORB-SLAM2")
-    for bar, val in zip(bars, durations):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
-                f"{val:.0f}s", ha='center', va='bottom', fontsize=7)
-    ax.grid(True, alpha=0.3, axis='y')
-
-    # Bar: average speed
+    # --- Closure error (GT-free drift proxy) ------------------------------
     ax = axes[1, 1]
-    bars = ax.bar(x, avg_speeds, color=colors, alpha=0.85)
+    bars = ax.bar(x, closure_errs, color=colors, alpha=0.85,
+                  edgecolor=['k' if c else 'none' for c in is_closed],
+                  linewidth=1.5)
     ax.set_xticks(x); ax.set_xticklabels(short_names, fontsize=8)
-    ax.set_ylabel("Average Speed (m/s)"); ax.set_title("Average Camera Speed per Sequence")
-    for bar, val in zip(bars, avg_speeds):
-        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002,
-                f"{val:.2f}", ha='center', va='bottom', fontsize=7)
+    ax.set_ylabel("Closure error (m)")
+    ax.set_title("End-vs-start distance\n(bold edge = loop sequence → drift proxy)")
+    for bar, val, closed in zip(bars, closure_errs, is_closed):
+        if not np.isnan(val):
+            marker = '' if closed else '*'
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                    f"{val:.2f}{marker}", ha='center', va='bottom', fontsize=7)
     ax.grid(True, alpha=0.3, axis='y')
+    ax.text(0.02, 0.96,
+            "* asterisked sequences are open-ended; the value\n  is informational, not a drift estimate.",
+            transform=ax.transAxes, fontsize=7, va='top',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='whitesmoke', alpha=0.9))
+
+    # --- Normalised drift vs path length for closed-loop sequences only ---
+    ax = axes[1, 2]
+    closed_idx = [i for i, c in enumerate(is_closed) if c]
+    if closed_idx:
+        xs = [path_lengths[i]   for i in closed_idx]
+        ys = [closure_errs[i]   for i in closed_idx]
+        cs = [colors[i]         for i in closed_idx]
+        lbl= [names[i]          for i in closed_idx]
+        ax.scatter(xs, ys, c=cs, s=80, edgecolors='k', zorder=3)
+        for xi, yi, li in zip(xs, ys, lbl):
+            ax.annotate(li, (xi, yi), fontsize=7, xytext=(4, 4),
+                        textcoords='offset points')
+        # Reference: 1% drift and 5% drift
+        xx = np.linspace(0, max(xs) * 1.15, 50)
+        ax.plot(xx, 0.01 * xx, 'k--', alpha=0.4, label='1% drift')
+        ax.plot(xx, 0.05 * xx, 'r--', alpha=0.4, label='5% drift')
+        ax.legend(fontsize=8)
+        ax.set_xlabel("Path length (m)")
+        ax.set_ylabel("Closure error (m)")
+        ax.set_title("Relative drift for closed-loop sequences")
+        ax.grid(True, alpha=0.3)
+    else:
+        ax.axis('off')
 
     # Legend: env type
     handles = [

@@ -10,6 +10,7 @@ Q1d: Loop closure disabled
 """
 
 import os
+import os.path
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
@@ -18,10 +19,12 @@ import matplotlib.gridspec as gridspec
 
 from evo.tools import file_interface
 from evo.core import metrics, sync, trajectory
-from evo.core.metrics import PoseRelation
+from evo.core.metrics import PoseRelation, Unit
 
-DATA = '/home/mmaaz/SLAM/coursework_deliverables/data/part1_analysis'
-OUT  = '/home/mmaaz/SLAM/coursework_deliverables/data/q1_results'
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.abspath(os.path.join(_HERE, '..'))
+DATA  = os.environ.get('SLAM_DATA', os.path.join(_ROOT, 'data', 'part1_analysis'))
+OUT   = os.environ.get('SLAM_OUT',  os.path.join(_ROOT, 'data', 'q1_results'))
 os.makedirs(OUT, exist_ok=True)
 
 # ──────────────────────────────────────────────────
@@ -52,6 +55,28 @@ def compute_ate(traj_est, traj_ref):
     except Exception as e:
         print(f"  [WARN] ATE failed: {e}")
         return None, None, None
+
+
+def compute_rpe(traj_est, traj_ref, delta=1.0, delta_unit=Unit.frames):
+    """
+    Compute Relative Pose Error (translation component) between aligned
+    trajectories. Uses fixed delta (default 1 frame) — the canonical EVO RPE.
+    Returns (stats_dict, per_edge_errors_array).
+    """
+    try:
+        ref_s, est_s = sync.associate_trajectories(traj_ref, traj_est,
+                                                    max_diff=0.5)
+        est_s.align(ref_s, correct_scale=True)
+        rpe = metrics.RPE(PoseRelation.translation_part,
+                          delta=delta, delta_unit=delta_unit,
+                          rel_delta_tol=0.1, all_pairs=False)
+        rpe.process_data((ref_s, est_s))
+        stats = rpe.get_all_statistics()
+        errs  = np.array(list(rpe.error))
+        return stats, errs
+    except Exception as e:
+        print(f"  [WARN] RPE failed: {e}")
+        return None, np.array([])
 
 
 def _axlim(arr, margin=0.1):
@@ -419,6 +444,117 @@ def plot_summary():
 
 
 # ──────────────────────────────────────────────────
+# Q1: RPE (Relative Pose Error) across all configurations
+# ──────────────────────────────────────────────────
+def plot_q1_rpe():
+    """
+    Compute RPE (translation) for every configuration used elsewhere in Q1
+    and render (1) a RMSE bar chart and (2) per-frame RPE curves for the
+    baselines. RPE is computed with delta=1 frame, which is the canonical
+    definition used in the TUM RGB-D benchmark.
+    """
+    print("\n=== Q1: RPE (Relative Pose Error) ===")
+
+    configs = {
+        'KITTI07 Baseline':   ('kitti07-baseline.txt',   'kitti07-gt-tum.txt'),
+        'KITTI07 feat=1500':  ('kitti07-feat1500.txt',   'kitti07-gt-tum.txt'),
+        'KITTI07 No Outlier': ('kitti07-nooutlier.txt',  'kitti07-gt-tum.txt'),
+        'KITTI07 No Loop':    ('kitti07-noloop.txt',     'kitti07-gt-tum.txt'),
+        'TUM Baseline':       ('tum-baseline.txt',
+                                'rgbd_dataset_freiburg1_xyz/groundtruth.txt'),
+        'TUM feat=800':       ('tum-feat800.txt',
+                                'rgbd_dataset_freiburg1_xyz/groundtruth.txt'),
+        'TUM feat=1500':      ('tum-feat1500.txt',
+                                'rgbd_dataset_freiburg1_xyz/groundtruth.txt'),
+        'TUM No Outlier':     ('tum-nooutlier.txt',
+                                'rgbd_dataset_freiburg1_xyz/groundtruth.txt'),
+        'TUM No Loop':        ('tum-noloop.txt',
+                                'rgbd_dataset_freiburg1_xyz/groundtruth.txt'),
+    }
+
+    labels, rmses, medians, baseline_curves = [], [], [], {}
+    for label, (est_f, gt_f) in configs.items():
+        est = load_traj(est_f)
+        gt  = load_traj(gt_f)
+        if est is None or gt is None:
+            print(f"  {label:25s}: NO DATA")
+            labels.append(label); rmses.append(float('nan')); medians.append(float('nan'))
+            continue
+        stats, errs = compute_rpe(est, gt, delta=1.0, delta_unit=Unit.frames)
+        if stats is None:
+            labels.append(label); rmses.append(float('nan')); medians.append(float('nan'))
+            continue
+        print(f"  {label:25s}: RPE RMSE={stats['rmse']:.4f}m  "
+              f"median={stats['median']:.4f}m  "
+              f"max={stats['max']:.4f}m  n_edges={len(errs)}")
+        labels.append(label)
+        rmses.append(stats['rmse'])
+        medians.append(stats['median'])
+        if 'Baseline' in label:
+            baseline_curves[label] = errs
+
+    # Plot: bar chart + baseline time series
+    fig = plt.figure(figsize=(16, 9))
+    gs  = gridspec.GridSpec(2, 2, height_ratios=[1.2, 1.0])
+    fig.suptitle('Q1: RPE (translation, δ=1 frame) — all configurations',
+                 fontsize=13, fontweight='bold')
+
+    # Bar chart
+    ax0 = fig.add_subplot(gs[0, :])
+    x = np.arange(len(labels))
+    colors = ['steelblue' if 'KITTI' in l else 'tomato' for l in labels]
+    bars = ax0.bar(x, [0 if np.isnan(v) else v for v in rmses],
+                   color=colors, alpha=0.85, edgecolor='k')
+    ax0.set_xticks(x)
+    ax0.set_xticklabels([l.replace('KITTI07 ', 'K: ').replace('TUM ', 'T: ')
+                          for l in labels], rotation=30, ha='right', fontsize=9)
+    ax0.set_ylabel('RPE RMSE (m per frame)')
+    ax0.set_title('RPE RMSE across configurations (blue=KITTI, red=TUM)')
+    ax0.grid(True, alpha=0.3, axis='y')
+    for bar, val, med in zip(bars, rmses, medians):
+        if np.isnan(val):
+            ax0.text(bar.get_x() + bar.get_width()/2, 0.001, 'NO DATA',
+                     ha='center', fontsize=7, color='red', rotation=90)
+        else:
+            ax0.text(bar.get_x() + bar.get_width()/2,
+                     bar.get_height() + 0.0005,
+                     f'{val:.3f}\n(med {med:.3f})',
+                     ha='center', fontsize=7)
+
+    # Baseline RPE curves
+    ax1 = fig.add_subplot(gs[1, 0])
+    for (name, errs), c in zip(baseline_curves.items(), ['tab:blue', 'tab:orange']):
+        ax1.plot(errs, lw=1.0, alpha=0.85, color=c, label=name)
+    ax1.set_xlabel('Edge index (frame pair)')
+    ax1.set_ylabel('RPE (m)')
+    ax1.set_title('Per-edge RPE — baselines')
+    ax1.legend(); ax1.grid(True, alpha=0.3)
+
+    # RMSE vs MEDIAN scatter
+    ax2 = fig.add_subplot(gs[1, 1])
+    for l, r, m in zip(labels, rmses, medians):
+        if np.isnan(r) or np.isnan(m):
+            continue
+        c = 'steelblue' if 'KITTI' in l else 'tomato'
+        ax2.scatter(m, r, c=c, s=60, edgecolors='k')
+        ax2.annotate(l.replace('KITTI07 ', '').replace('TUM ', ''),
+                     (m, r), fontsize=7, xytext=(3, 3),
+                     textcoords='offset points')
+    lim = max([0.01] + [v for v in rmses + medians if not np.isnan(v)])
+    ax2.plot([0, lim], [0, lim], 'k--', alpha=0.3, label='RMSE = median')
+    ax2.set_xlabel('RPE median (m)')
+    ax2.set_ylabel('RPE RMSE (m)')
+    ax2.set_title('RMSE vs median: gap indicates outliers')
+    ax2.grid(True, alpha=0.3); ax2.legend(fontsize=8)
+
+    plt.tight_layout()
+    out = os.path.join(OUT, 'q1_rpe.png')
+    plt.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {out}")
+
+
+# ──────────────────────────────────────────────────
 # MAIN
 # ──────────────────────────────────────────────────
 if __name__ == '__main__':
@@ -427,4 +563,5 @@ if __name__ == '__main__':
     plot_q1c()
     plot_q1d()
     plot_summary()
+    plot_q1_rpe()
     print(f"\nAll Q1 plots saved to: {OUT}")

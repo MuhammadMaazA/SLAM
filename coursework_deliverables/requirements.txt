@@ -1,0 +1,8 @@
+numpy>=1.21
+scipy>=1.7
+matplotlib>=3.5
+scikit-learn>=1.0
+opencv-python>=4.5
+evo>=1.21
+gtsam>=4.2
+rplidar-roboticia>=0.9

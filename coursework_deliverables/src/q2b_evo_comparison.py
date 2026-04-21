@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Q2b: EVO-based comparison of COLMAP vs ORB-SLAM2 trajectories.
-Uses EVO Python API to compute ATE (aligned + scaled) for each sequence.
-Updates q2b_colmap_vs_orbslam.png with quantitative metrics.
+Uses EVO Python API (evo.core) to compute ATE (aligned + scaled) for each sequence,
+consistent with the EVO toolchain used in Q1.
 """
 
 import os, sys
@@ -12,9 +12,16 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
-COLMAP_DIR  = '/home/mmaaz/SLAM/coursework_deliverables/data/q2_results/colmap_runs'
-ORBSLAM_DIR = '/home/mmaaz/SLAM/coursework_deliverables/data/q2_results/orbslam_runs'
-OUT_DIR     = '/home/mmaaz/SLAM/coursework_deliverables/data/q2_results'
+from evo.core import trajectory as evo_traj, metrics, sync
+from evo.core.metrics import PoseRelation
+from evo.tools import file_interface
+
+_HERE       = os.path.dirname(os.path.abspath(__file__))
+_ROOT       = os.path.abspath(os.path.join(_HERE, '..'))
+_BASE       = os.environ.get('SLAM_DATA', os.path.join(_ROOT, 'data'))
+COLMAP_DIR  = os.path.join(_BASE, 'q2_results', 'colmap_runs')
+ORBSLAM_DIR = os.path.join(_BASE, 'q2_results', 'orbslam_runs')
+OUT_DIR     = os.path.join(_BASE, 'q2_results')
 
 # Sequences with enough COLMAP poses for EVO comparison
 SEQUENCES = [
@@ -33,23 +40,10 @@ SEQ_COLORS = {'outdoor': '#ff6d00', 'indoor': '#00e5ff', 'mixed': '#76ff03'}
 
 
 def load_tum(path):
-    """Load TUM format trajectory → (timestamps, xyz array)."""
-    ts, xyz = [], []
-    with open(path) as f:
-        for line in f:
-            if line.startswith('#') or not line.strip():
-                continue
-            p = line.split()
-            if len(p) >= 4:
-                ts.append(float(p[0]))
-                xyz.append([float(p[1]), float(p[2]), float(p[3])])
-    return np.array(ts), np.array(xyz) if xyz else np.zeros((0, 3))
-
-
-def load_colmap_poses(path):
-    """Load COLMAP poses. Format: name tx ty tz qx qy qz qw (world-to-cam transform).
-    Invert to get camera-in-world position."""
-    poses = []
+    """Load TUM format trajectory → (timestamps, xyz, 4x4 SE(3) poses).
+    TUM format: ts tx ty tz qx qy qz qw (camera-in-world).
+    """
+    ts, xyz, poses = [], [], []
     with open(path) as f:
         for line in f:
             if line.startswith('#') or not line.strip():
@@ -58,13 +52,44 @@ def load_colmap_poses(path):
             if len(p) >= 8:
                 tx, ty, tz = float(p[1]), float(p[2]), float(p[3])
                 qx, qy, qz, qw = float(p[4]), float(p[5]), float(p[6]), float(p[7])
-                # Rotation matrix from quaternion (world-to-cam)
                 R = quat_to_rot(qw, qx, qy, qz)
-                # Camera center in world = -R^T * t
-                t = np.array([tx, ty, tz])
-                cam_pos = -R.T @ t
-                poses.append(cam_pos)
-    return np.array(poses) if poses else np.zeros((0, 3))
+                T = np.eye(4); T[:3, :3] = R; T[:3, 3] = [tx, ty, tz]
+                ts.append(float(p[0]))
+                xyz.append([tx, ty, tz])
+                poses.append(T)
+            elif len(p) >= 4:
+                ts.append(float(p[0]))
+                xyz.append([float(p[1]), float(p[2]), float(p[3])])
+                T = np.eye(4); T[:3, 3] = [float(p[1]), float(p[2]), float(p[3])]
+                poses.append(T)
+    return (np.array(ts),
+            np.array(xyz) if xyz else np.zeros((0, 3)),
+            np.array(poses) if poses else np.zeros((0, 4, 4)))
+
+
+def load_colmap_poses(path):
+    """Load COLMAP poses → (cam positions Nx3, 4x4 camera-in-world SE(3)).
+    Input stores world-to-cam; we invert to get cam-in-world."""
+    positions, se3 = [], []
+    with open(path) as f:
+        for line in f:
+            if line.startswith('#') or not line.strip():
+                continue
+            p = line.split()
+            if len(p) >= 8:
+                tx, ty, tz = float(p[1]), float(p[2]), float(p[3])
+                qx, qy, qz, qw = float(p[4]), float(p[5]), float(p[6]), float(p[7])
+                # world-to-cam R
+                R_w2c = quat_to_rot(qw, qx, qy, qz)
+                t_w2c = np.array([tx, ty, tz])
+                # camera-in-world
+                R_c2w = R_w2c.T
+                t_c2w = -R_w2c.T @ t_w2c
+                T = np.eye(4); T[:3, :3] = R_c2w; T[:3, 3] = t_c2w
+                positions.append(t_c2w)
+                se3.append(T)
+    return (np.array(positions) if positions else np.zeros((0, 3)),
+            np.array(se3)       if se3       else np.zeros((0, 4, 4)))
 
 
 def quat_to_rot(qw, qx, qy, qz):
@@ -80,40 +105,58 @@ def quat_to_rot(qw, qx, qy, qz):
     ])
 
 
-def align_umeyama(src, dst):
-    """Umeyama alignment: find s, R, t such that dst ≈ s*R*src + t.
-    Returns aligned src and scale."""
-    n = len(src)
-    if n < 3:
-        return src, 1.0, float('nan')
-    mu_s = src.mean(0)
-    mu_d = dst.mean(0)
-    ss = src - mu_s
-    ds = dst - mu_d
-    cov = ds.T @ ss / n
-    U, sv, Vt = np.linalg.svd(cov)
-    S = np.diag([1, 1, np.sign(np.linalg.det(U @ Vt))])
-    R = U @ S @ Vt
-    scale = (sv @ [1, 1, np.sign(np.linalg.det(U @ Vt))]) / (ss * ss).sum() * n
-    t = mu_d - scale * R @ mu_s
-    aligned = scale * (R @ src.T).T + t
-    return aligned, scale, R
+def build_evo_traj(poses_se3):
+    """Convert Nx4x4 SE(3) array to an EVO PoseTrajectory3D (synthetic timestamps)."""
+    n = len(poses_se3)
+    timestamps = np.arange(n, dtype=float)
+    return evo_traj.PoseTrajectory3D(
+        poses_se3=np.asarray(poses_se3, dtype=float),
+        timestamps=timestamps
+    )
 
 
-def compute_ate_rmse(est_xyz, ref_xyz):
-    """Subsample both trajectories uniformly to same length, compute ATE RMSE."""
-    n = min(len(est_xyz), len(ref_xyz))
+def _resample_and_align(est_se3, ref_se3):
+    """Resample both sequences to equal length, align with Umeyama (scale=True)."""
+    n = min(len(est_se3), len(ref_se3))
     if n < 5:
-        return float('nan')
-    # Subsample
-    idx_e = np.round(np.linspace(0, len(est_xyz)-1, n)).astype(int)
-    idx_r = np.round(np.linspace(0, len(ref_xyz)-1, n)).astype(int)
-    e = est_xyz[idx_e]
-    r = ref_xyz[idx_r]
-    # Align ORB-SLAM2 (est) to COLMAP (ref) with scale
-    e_aligned, scale, R = align_umeyama(e, r)
-    errors = np.linalg.norm(e_aligned - r, axis=1)
-    return float(np.sqrt(np.mean(errors**2)))
+        return None, None
+    idx_e = np.round(np.linspace(0, len(est_se3) - 1, n)).astype(int)
+    idx_r = np.round(np.linspace(0, len(ref_se3) - 1, n)).astype(int)
+    traj_est = build_evo_traj(est_se3[idx_e])
+    traj_ref = build_evo_traj(ref_se3[idx_r])
+    traj_ref_s, traj_est_s = sync.associate_trajectories(traj_ref, traj_est,
+                                                          max_diff=0.5)
+    traj_est_s.align(traj_ref_s, correct_scale=True)
+    return traj_ref_s, traj_est_s
+
+
+def compute_ate_evo(est_se3, ref_se3):
+    """
+    Compute ATE using EVO with three pose relations:
+      - translation_part   : standard ATE (metres)
+      - rotation_angle_deg : orientation error (degrees)
+      - full_transformation: combined SE(3) error
+    Returns dict with rmse/median/mean for each, plus aligned trajectories.
+    """
+    try:
+        ref_s, est_s = _resample_and_align(est_se3, ref_se3)
+        if ref_s is None:
+            return None, None, None
+        out = {}
+        for key, rel in [('trans', PoseRelation.translation_part),
+                         ('rot',   PoseRelation.rotation_angle_deg),
+                         ('full',  PoseRelation.full_transformation)]:
+            m = metrics.APE(rel)
+            m.process_data((ref_s, est_s))
+            s = m.get_all_statistics()
+            out[key] = {'rmse': float(s['rmse']),
+                         'median': float(s['median']),
+                         'mean':   float(s['mean']),
+                         'max':    float(s['max'])}
+        return out, ref_s, est_s
+    except Exception as e:
+        print(f"    [EVO] {e}")
+        return None, None, None
 
 
 def plot_trajectory_2d(ax, pts, color, label, lw=1.5, alpha=0.85):
@@ -132,17 +175,25 @@ def main():
         if not os.path.exists(colmap_path) or not os.path.exists(orbslam_path):
             print(f"  SKIP {seq} (missing files)")
             continue
-        colmap_xyz  = load_colmap_poses(colmap_path)
-        _, orb_xyz  = load_tum(orbslam_path)
+        colmap_xyz, colmap_se3 = load_colmap_poses(colmap_path)
+        _, orb_xyz, orb_se3    = load_tum(orbslam_path)
         if len(colmap_xyz) < 5 or len(orb_xyz) < 5:
             print(f"  SKIP {seq} (too few poses)")
             continue
-        ate = compute_ate_rmse(orb_xyz, colmap_xyz)
+        ate, _, _ = compute_ate_evo(orb_se3, colmap_se3)
+        ate_t   = ate['trans']['rmse'] if ate else float('nan')
+        ate_rot = ate['rot']['rmse']   if ate else float('nan')
+        ate_full= ate['full']['rmse']  if ate else float('nan')
         results[seq] = {
-            'env': env, 'n_colmap': len(colmap_xyz), 'n_orb': len(orb_xyz),
-            'ate_rmse': ate, 'colmap_xyz': colmap_xyz, 'orb_xyz': orb_xyz
+            'env': env,
+            'n_colmap': len(colmap_xyz), 'n_orb': len(orb_xyz),
+            'ate_rmse':     ate_t,
+            'ate_rot_deg':  ate_rot,
+            'ate_full':     ate_full,
+            'colmap_xyz': colmap_xyz, 'orb_xyz': orb_xyz,
         }
-        print(f"  {seq}: COLMAP={len(colmap_xyz)} ORB={len(orb_xyz)} ATE RMSE={ate:.4f}m")
+        print(f"  {seq}: COLMAP={len(colmap_xyz)} ORB={len(orb_xyz)} "
+              f"ATE trans={ate_t:.4f}m  rot={ate_rot:.2f}deg  full={ate_full:.4f}")
 
     if not results:
         print("No sequences processed")
@@ -163,11 +214,16 @@ def main():
     # Summary table row
     ax_table = fig.add_subplot(gs[0, :])
     ax_table.axis('off')
-    headers = ['Sequence', 'Env', 'COLMAP poses', 'ORB-SLAM2 poses', 'ATE RMSE (m)']
+    headers = ['Sequence', 'Env', 'COLMAP', 'ORB-SLAM2',
+               'ATE trans (m)', 'ATE rot (deg)', 'ATE full (SE3)']
     rows    = []
     for seq, r in results.items():
-        ate_str = f"{r['ate_rmse']:.4f}" if not np.isnan(r['ate_rmse']) else 'N/A'
-        rows.append([seq, r['env'], str(r['n_colmap']), str(r['n_orb']), ate_str])
+        def _fmt(v, prec=4):
+            return f"{v:.{prec}f}" if (v is not None and not np.isnan(v)) else 'N/A'
+        rows.append([seq, r['env'], str(r['n_colmap']), str(r['n_orb']),
+                      _fmt(r['ate_rmse']),
+                      _fmt(r['ate_rot_deg'], 2),
+                      _fmt(r['ate_full'])])
     tbl = ax_table.table(cellText=rows, colLabels=headers,
                          loc='center', cellLoc='center')
     tbl.auto_set_font_size(False)
@@ -190,7 +246,11 @@ def main():
         plot_trajectory_2d(ax, r['colmap_xyz'], '#f39c12', 'COLMAP (ref)', lw=1.2)
         plot_trajectory_2d(ax, r['orb_xyz'],    color_env, 'ORB-SLAM2', lw=1.5)
 
-        ate_str = f"ATE RMSE: {r['ate_rmse']:.3f} m" if not np.isnan(r['ate_rmse']) else "ATE: N/A"
+        if not np.isnan(r['ate_rmse']):
+            ate_str = (f"ATE: trans={r['ate_rmse']:.3f}m  "
+                       f"rot={r['ate_rot_deg']:.1f}°")
+        else:
+            ate_str = "ATE: N/A"
         ax.set_title(f"{seq}\n{ate_str}", fontsize=8)
         ax.set_xlabel('X (m)', fontsize=7)
         ax.set_ylabel('Z (m)', fontsize=7)
@@ -205,10 +265,15 @@ def main():
     print(f"\nSaved: {out}")
 
     # Print summary
-    print("\nQ2b EVO Comparison Summary:")
+    print("\nQ2b EVO Comparison Summary (translation + orientation):")
+    print(f"  {'Sequence':<18} {'COLMAP':>7} {'ORB':>6} "
+          f"{'trans (m)':>10} {'rot (deg)':>10} {'full':>10}")
     for seq, r in results.items():
-        ate_str = f"{r['ate_rmse']:.4f}m" if not np.isnan(r['ate_rmse']) else 'N/A'
-        print(f"  {seq:<20}: COLMAP={r['n_colmap']:4d}  ORB={r['n_orb']:5d}  ATE={ate_str}")
+        def _f(v, p=4):
+            return f"{v:.{p}f}" if (v is not None and not np.isnan(v)) else 'N/A'
+        print(f"  {seq:<18} {r['n_colmap']:>7d} {r['n_orb']:>6d} "
+              f"{_f(r['ate_rmse']):>10} {_f(r['ate_rot_deg'], 2):>10} "
+              f"{_f(r['ate_full']):>10}")
 
 
 if __name__ == '__main__':

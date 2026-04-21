@@ -21,12 +21,22 @@ import time
 from sklearn.neighbors import NearestNeighbors
 from scipy.optimize import minimize
 
+try:
+    import gtsam
+    from gtsam import Pose2, BetweenFactorPose2, PriorFactorPose2, noiseModel
+    _HAVE_GTSAM = True
+except Exception as _e:
+    _HAVE_GTSAM = False
+    print(f"[WARN] GTSAM unavailable ({_e}); falling back to scipy SLSQP optimiser.")
+
 # ============================================================
 # PATHS
 # ============================================================
-REC1     = '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings'
-REC2     = '/home/mmaaz/SLAM/extracted_data/tmp_recordings2'
-OUT_DIR  = '/home/mmaaz/SLAM/coursework_deliverables/data/q3_results'
+_HERE    = os.path.dirname(os.path.abspath(__file__))
+_ROOT    = os.path.abspath(os.path.join(_HERE, '..'))
+REC1     = os.environ.get('SLAM_REC1', '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings')
+REC2     = os.environ.get('SLAM_REC2', '/home/mmaaz/SLAM/extracted_data/tmp_recordings2')
+OUT_DIR  = os.environ.get('SLAM_OUT',  os.path.join(_ROOT, 'data', 'q3_results'))
 os.makedirs(OUT_DIR, exist_ok=True)
 
 SEQUENCES = {
@@ -370,7 +380,56 @@ def run_q3b(seq_name, scans_raw, out_dir):
     # ---- Plots ----
     _plot_q3b(seq_name, res_range, res_angular, res_voxel, res_rate, out_dir)
 
+    # ---- Per-parameter occupancy grids (required by brief) ----
+    _plot_q3b_occupancy_grids(seq_name,
+                              [('Max Range',         res_range),
+                               ('Angular Resolution', res_angular),
+                               ('Voxel Downsampling', res_voxel),
+                               ('Scan Rate',          res_rate)],
+                              out_dir)
+
     return res_range, res_angular, res_voxel, res_rate
+
+
+def _plot_q3b_occupancy_grids(seq_name, groups, out_dir, cell_m=0.05, grid_m=25.0):
+    """
+    For each parameter group (Max Range / Angular Resolution / Voxel / Scan Rate),
+    build an occupancy grid for every variation and save a side-by-side figure.
+    This addresses the coursework brief's requirement to show occupancy-grid
+    outputs for each parameter setting in Q3b.
+    """
+    for group_title, res_dict in groups:
+        n = len(res_dict)
+        fig, axes = plt.subplots(1, n, figsize=(5 * n, 5.2))
+        if n == 1:
+            axes = [axes]
+        fig.suptitle(f'Q3b Occupancy Grids — {seq_name} — {group_title}',
+                     fontsize=13, fontweight='bold')
+        for ax, (label, r) in zip(axes, res_dict.items()):
+            traj  = r['trajectory']
+            kf    = r['map_pts']
+            # Subsample for speed if very long
+            step  = max(1, len(kf) // 400)
+            t_sub = traj[::step][:len(kf[::step])]
+            k_sub = kf[::step]
+            grid, origin = build_occupancy_grid(t_sub, k_sub,
+                                                 cell_m=cell_m, grid_m=grid_m)
+            ax.imshow(grid, cmap='gray', origin='lower',
+                      extent=[origin[0], origin[0] + grid_m,
+                              origin[1], origin[1] + grid_m])
+            ax.plot(traj[:, 0], traj[:, 1], 'r-', lw=1.0, alpha=0.7)
+            ax.plot(*traj[0, :2],  'go', ms=6)
+            ax.plot(*traj[-1, :2], 'bs', ms=6)
+            ce = closure_error(traj)
+            ax.set_title(f'{label}\nclosure={ce:.2f} m', fontsize=9)
+            ax.set_xlabel('X (m)', fontsize=8); ax.set_ylabel('Y (m)', fontsize=8)
+            ax.set_aspect('equal')
+        plt.tight_layout()
+        safe = group_title.lower().replace(' ', '_')
+        out = os.path.join(out_dir, f'q3b_grids_{seq_name.lower()}_{safe}.png')
+        plt.savefig(out, dpi=140, bbox_inches='tight')
+        plt.close()
+        print(f"  Saved: {out}")
 
 
 def _plot_q3b(seq_name, res_range, res_angular, res_voxel, res_rate, out_dir):
@@ -575,14 +634,11 @@ def build_pose_graph(kf_poses, closures,
     return factors
 
 
-def optimize_pose_graph(kf_poses, factors, n_iter=200):
+def _optimize_pose_graph_scipy(kf_poses, factors, n_iter=200):
     """
-    Simple gradient descent pose-graph optimisation.
-    Fixes pose 0 as the anchor.
-    Returns optimised list of 3x3 pose matrices.
+    Scipy SLSQP fallback optimiser (anchors pose 0 with equality constraint).
     """
     n = len(kf_poses)
-    # Initial guess: extract (x, y, theta) from 3x3 matrices
     x0 = np.zeros(3 * n)
     for k, P in enumerate(kf_poses):
         x0[3*k]   = P[0, 2]
@@ -598,14 +654,13 @@ def optimize_pose_graph(kf_poses, factors, n_iter=200):
             total += omega * float(e @ e)
         return total
 
-    # Fix first pose (anchor)
     def anchor(x):
         return x[:3] - x0[:3]
 
-    result = minimize(cost, x0, method='L-BFGS-B',
-                      options={'maxiter': n_iter, 'ftol': 1e-9, 'gtol': 1e-7})
+    result = minimize(cost, x0, method='SLSQP',
+                      constraints={'type': 'eq', 'fun': anchor},
+                      options={'maxiter': n_iter, 'ftol': 1e-9})
     xopt = result.x
-    # Re-build matrices
     opt_poses = []
     for k in range(n):
         xi, yi, ti = xopt[3*k], xopt[3*k+1], xopt[3*k+2]
@@ -615,6 +670,71 @@ def optimize_pose_graph(kf_poses, factors, n_iter=200):
         T[0,2], T[1,2] =  xi, yi
         opt_poses.append(T)
     return opt_poses
+
+
+def _optimize_pose_graph_gtsam(kf_poses, factors, verbose=False):
+    """
+    GTSAM Levenberg-Marquardt pose-graph optimisation (Pose2).
+    Anchors pose 0 with a tight Gaussian prior (equivalent to fixing it).
+    Information matrix per factor is diag(omega) across (x, y, theta).
+    """
+    graph   = gtsam.NonlinearFactorGraph()
+    initial = gtsam.Values()
+
+    # Anchor: strong prior on pose 0 so the global frame is fixed
+    prior_sigmas = np.array([1e-6, 1e-6, 1e-8])
+    prior_noise  = noiseModel.Diagonal.Sigmas(prior_sigmas)
+    p0 = kf_poses[0]
+    theta0 = np.arctan2(p0[1, 0], p0[0, 0])
+    graph.add(PriorFactorPose2(0, Pose2(p0[0, 2], p0[1, 2], theta0), prior_noise))
+
+    # Initial estimates from raw ICP trajectory
+    for k, P in enumerate(kf_poses):
+        theta_k = np.arctan2(P[1, 0], P[0, 0])
+        initial.insert(k, Pose2(P[0, 2], P[1, 2], theta_k))
+
+    # Between factors (odometry + loop closures)
+    for i, j, z, omega in factors:
+        sigma = 1.0 / np.sqrt(max(omega, 1e-9))
+        noise = noiseModel.Diagonal.Sigmas(np.array([sigma, sigma, sigma]))
+        graph.add(BetweenFactorPose2(i, j, Pose2(z[0], z[1], z[2]), noise))
+
+    params = gtsam.LevenbergMarquardtParams()
+    params.setMaxIterations(200)
+    params.setRelativeErrorTol(1e-8)
+    params.setAbsoluteErrorTol(1e-8)
+    if verbose:
+        params.setVerbosityLM('SUMMARY')
+
+    optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial, params)
+    result = optimizer.optimize()
+
+    if verbose:
+        print(f"    GTSAM: initial error={graph.error(initial):.4f}, "
+              f"final error={graph.error(result):.4f}, "
+              f"iters={optimizer.iterations()}")
+
+    opt_poses = []
+    for k in range(len(kf_poses)):
+        p  = result.atPose2(k)
+        ct, st = np.cos(p.theta()), np.sin(p.theta())
+        T  = np.eye(3)
+        T[0, 0], T[0, 1] = ct, -st
+        T[1, 0], T[1, 1] = st,  ct
+        T[0, 2], T[1, 2] = p.x(), p.y()
+        opt_poses.append(T)
+    return opt_poses
+
+
+def optimize_pose_graph(kf_poses, factors, n_iter=200):
+    """
+    Factor-graph pose-graph optimisation.
+    Uses GTSAM (Levenberg-Marquardt) when available, else scipy SLSQP.
+    Returns optimised list of 3x3 pose matrices.
+    """
+    if _HAVE_GTSAM:
+        return _optimize_pose_graph_gtsam(kf_poses, factors, verbose=True)
+    return _optimize_pose_graph_scipy(kf_poses, factors, n_iter=n_iter)
 
 
 def closure_error(trajectory):
@@ -687,7 +807,84 @@ def run_q3d(seq_name, slam_result, closures, out_dir):
     plt.close()
     print(f"  Saved: {out}")
 
+    # ---- Before/After occupancy grids (required by brief) ----
+    _plot_q3d_occupancy_before_after(seq_name, slam_result, opt_poses, out_dir)
+
     return opt_poses, err_before, err_after
+
+
+def _transform_local_scans_to_global(kf_global_pts, kf_poses_before, kf_poses_after):
+    """
+    The `map_pts` stored by run_slam are already in the ORIGINAL global frame.
+    To rebuild the map with the *optimised* keyframe poses we first transform
+    each keyframe's points back into its local frame using the pre-optimisation
+    pose, then re-transform using the post-optimisation pose.
+    """
+    fixed = []
+    n = min(len(kf_global_pts), len(kf_poses_before), len(kf_poses_after))
+    for k in range(n):
+        P_before = kf_poses_before[k]
+        P_after  = kf_poses_after[k]
+        pts_g    = kf_global_pts[k]
+        if pts_g is None or len(pts_g) == 0:
+            fixed.append(pts_g)
+            continue
+        # World -> local (pre-opt) -> world (post-opt)
+        h_g   = np.vstack([pts_g.T, np.ones(len(pts_g))])
+        h_l   = np.linalg.inv(P_before) @ h_g
+        h_g2  = P_after @ h_l
+        fixed.append(h_g2[:2].T)
+    return fixed
+
+
+def _plot_q3d_occupancy_before_after(seq_name, slam_result, opt_poses, out_dir,
+                                     cell_m=0.05, grid_m=25.0):
+    """
+    Build and compare occupancy grids using raw-ICP keyframe poses vs the
+    optimised factor-graph keyframe poses. Saves a 1x2 figure.
+    """
+    kf_poses_before = slam_result['kf_poses']
+    kf_pts_world    = slam_result['map_pts']   # already in raw-ICP world frame
+
+    # --- Before grid ---
+    traj_before = np.array([[P[0, 2], P[1, 2], np.arctan2(P[1, 0], P[0, 0])]
+                             for P in kf_poses_before])
+    grid_b, origin_b = build_occupancy_grid(traj_before, kf_pts_world,
+                                             cell_m=cell_m, grid_m=grid_m)
+
+    # --- After grid: rebuild points using optimised poses ---
+    kf_pts_opt = _transform_local_scans_to_global(kf_pts_world,
+                                                   kf_poses_before,
+                                                   opt_poses)
+    traj_after = np.array([[P[0, 2], P[1, 2], np.arctan2(P[1, 0], P[0, 0])]
+                            for P in opt_poses])
+    grid_a, origin_a = build_occupancy_grid(traj_after, kf_pts_opt,
+                                             cell_m=cell_m, grid_m=grid_m)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+    fig.suptitle(f'Q3d Occupancy Grid — Before vs After Factor-Graph Optimisation '
+                 f'— {seq_name}', fontweight='bold')
+
+    for ax, grid, origin, traj, title in [
+        (axes[0], grid_b, origin_b, traj_before, 'Before (ICP odometry only)'),
+        (axes[1], grid_a, origin_a, traj_after,  'After (factor-graph optimised)'),
+    ]:
+        ax.imshow(grid, cmap='gray', origin='lower',
+                  extent=[origin[0], origin[0]+grid_m,
+                          origin[1], origin[1]+grid_m])
+        ax.plot(traj[:, 0], traj[:, 1], 'r-', lw=1.2, alpha=0.8)
+        ax.plot(*traj[0, :2],  'go', ms=8, label='Start')
+        ax.plot(*traj[-1, :2], 'bs', ms=8, label='End')
+        ax.set_title(title, fontsize=11)
+        ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
+        ax.legend(loc='upper right')
+        ax.set_aspect('equal')
+
+    plt.tight_layout()
+    out = os.path.join(out_dir, f'q3d_grid_{seq_name.lower()}.png')
+    plt.savefig(out, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {out}")
 
 
 # ============================================================
