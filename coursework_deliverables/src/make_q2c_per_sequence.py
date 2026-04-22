@@ -9,20 +9,24 @@ import os
 import numpy as np
 import cv2
 
-ORBSLAM_DIR = '/home/mmaaz/SLAM/coursework_deliverables/data/q2_results/orbslam_runs'
-COLMAP_DIR  = '/home/mmaaz/SLAM/coursework_deliverables/data/q2_results/colmap_runs'
-OUT_DIR     = '/home/mmaaz/SLAM/sequence_videos'
+_HERE       = os.path.dirname(os.path.abspath(__file__))
+_ROOT       = os.path.abspath(os.path.join(_HERE, '..'))
+_REC1       = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))
+_REC2       = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
+ORBSLAM_DIR = os.environ.get('SLAM_ORBSLAM_OUT', os.path.join(_ROOT, 'data', 'q2_results', 'orbslam_runs'))
+COLMAP_DIR  = os.environ.get('SLAM_COLMAP_OUT',  os.path.join(_ROOT, 'data', 'q2_results', 'colmap_runs'))
+OUT_DIR     = os.environ.get('SLAM_VID_OUT',     os.path.join(_ROOT, '..', 'sequence_videos'))
 
 SEQUENCES = {
-    'OnePoolStreet1': '/home/mmaaz/SLAM/extracted_data/tmp_recordings2/OnePoolStreet1/camera',
-    'Outdoor_1':      '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Outdoor_1/camera',
-    'Entrance2':      '/home/mmaaz/SLAM/extracted_data/tmp_recordings2/Entrance2/camera',
-    'Basement_1':     '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Basement_1/camera',
-    'Basement_2':     '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Basement_2/camera',
-    'Washroom':       '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Washroom/camera',
-    'BikeStorage':    '/home/mmaaz/SLAM/extracted_data/tmp_recordings2/BikeStorage/camera',
-    'BikeStorage2':   '/home/mmaaz/SLAM/extracted_data/tmp_recordings2/BikeStorage2/camera',
-    'Floor7_Hallway': '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Floor7_Hallway/camera',
+    'OnePoolStreet1': os.path.join(_REC2, 'OnePoolStreet1', 'camera'),
+    'Outdoor_1':      os.path.join(_REC1, 'Outdoor_1',      'camera'),
+    'Entrance2':      os.path.join(_REC2, 'Entrance2',       'camera'),
+    'Basement_1':     os.path.join(_REC1, 'Basement_1',      'camera'),
+    'Basement_2':     os.path.join(_REC1, 'Basement_2',      'camera'),
+    'Washroom':       os.path.join(_REC1, 'Washroom',        'camera'),
+    'BikeStorage':    os.path.join(_REC2, 'BikeStorage',     'camera'),
+    'BikeStorage2':   os.path.join(_REC2, 'BikeStorage2',    'camera'),
+    'Floor7_Hallway': os.path.join(_REC1, 'Floor7_Hallway',  'camera'),
 }
 
 FPS        = 20

@@ -14,14 +14,14 @@ CONFIGS = {
     'q2c': {
         'script':   os.path.join(SRC_DIR, 'live_q2c_display.py'),
         'win_name': 'COMP0222 CW2 - ORB-SLAM2 Monocular SLAM',
-        'out':      '/home/mmaaz/SLAM/COMP0222_CW2_GRP_1_Visual_SLAM.mp4',
+        'out':      os.environ.get('SLAM_VIDEO_Q2', os.path.join(SRC_DIR, '..', '..', 'COMP0222_CW2_GRP_32_Visual_SLAM.mp4')),
         'fps':      15,
         'max_sec':  70,
     },
     'q3e': {
         'script':   os.path.join(SRC_DIR, 'live_q3e_display.py'),
         'win_name': 'COMP0222 CW2 - LiDAR SLAM Real-Time Mapping',
-        'out':      '/home/mmaaz/SLAM/COMP0222_CW2_GRP_1_LiDAR_SLAM.mp4',
+        'out':      os.environ.get('SLAM_VIDEO_Q3', os.path.join(SRC_DIR, '..', '..', 'COMP0222_CW2_GRP_32_LiDAR_SLAM.mp4')),
         'fps':      10,
         'max_sec':  50,
     },

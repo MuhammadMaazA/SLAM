@@ -11,18 +11,23 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import cv2
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.abspath(os.path.join(_HERE, '..'))
+_REC1 = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))
+_REC2 = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
+
 SEQUENCES = {
-    'Basement_1':    '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Basement_1/lidar/scans.jsonl',
-    'Outdoor_1':     '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Outdoor_1/lidar/scans.jsonl',
-    'Basement_2':    '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Basement_2/lidar/scans.jsonl',
-    'Floor7_Hallway':'/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Floor7_Hallway/lidar/scans.jsonl',
-    'Washroom':      '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Washroom/lidar/scans.jsonl',
-    'BikeStorage':   '/home/mmaaz/SLAM/extracted_data/tmp_recordings2/BikeStorage/lidar/scans.jsonl',
-    'BikeStorage2':  '/home/mmaaz/SLAM/extracted_data/tmp_recordings2/BikeStorage2/lidar/scans.jsonl',
-    'Entrance2':     '/home/mmaaz/SLAM/extracted_data/tmp_recordings2/Entrance2/lidar/scans.jsonl',
-    'OnePoolStreet1':'/home/mmaaz/SLAM/extracted_data/tmp_recordings2/OnePoolStreet1/lidar/scans.jsonl',
+    'Basement_1':     os.path.join(_REC1, 'Basement_1',     'lidar', 'scans.jsonl'),
+    'Outdoor_1':      os.path.join(_REC1, 'Outdoor_1',      'lidar', 'scans.jsonl'),
+    'Basement_2':     os.path.join(_REC1, 'Basement_2',     'lidar', 'scans.jsonl'),
+    'Floor7_Hallway': os.path.join(_REC1, 'Floor7_Hallway', 'lidar', 'scans.jsonl'),
+    'Washroom':       os.path.join(_REC1, 'Washroom',       'lidar', 'scans.jsonl'),
+    'BikeStorage':    os.path.join(_REC2, 'BikeStorage',    'lidar', 'scans.jsonl'),
+    'BikeStorage2':   os.path.join(_REC2, 'BikeStorage2',   'lidar', 'scans.jsonl'),
+    'Entrance2':      os.path.join(_REC2, 'Entrance2',      'lidar', 'scans.jsonl'),
+    'OnePoolStreet1': os.path.join(_REC2, 'OnePoolStreet1', 'lidar', 'scans.jsonl'),
 }
-OUT_VIDEO = "/home/mmaaz/SLAM/COMP0222_CW2_GRP_1_LiDAR_SLAM.mp4"
+OUT_VIDEO = os.environ.get('SLAM_VIDEO_Q3', os.path.join(_ROOT, '..', 'COMP0222_CW2_GRP_32_LiDAR_SLAM.mp4'))
 MAX_SCANS = 300
 MAX_RANGE = 4000
 FPS       = 10

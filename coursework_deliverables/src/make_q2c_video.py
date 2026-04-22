@@ -12,9 +12,11 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import cv2
 
-ORBSLAM_DIR = '/home/mmaaz/SLAM/coursework_deliverables/data/q2_results/orbslam_runs'
-COLMAP_DIR  = '/home/mmaaz/SLAM/coursework_deliverables/data/q2_results/colmap_runs'
-OUT_VIDEO   = '/home/mmaaz/SLAM/COMP0222_CW2_GRP_1_Visual_SLAM.mp4'
+_HERE       = os.path.dirname(os.path.abspath(__file__))
+_ROOT       = os.path.abspath(os.path.join(_HERE, '..'))
+ORBSLAM_DIR = os.environ.get('SLAM_ORBSLAM_OUT', os.path.join(_ROOT, 'data', 'q2_results', 'orbslam_runs'))
+COLMAP_DIR  = os.environ.get('SLAM_COLMAP_OUT',  os.path.join(_ROOT, 'data', 'q2_results', 'colmap_runs'))
+OUT_VIDEO   = os.environ.get('SLAM_VIDEO_Q2',    os.path.join(_ROOT, '..', 'COMP0222_CW2_GRP_32_Visual_SLAM.mp4'))
 
 SEQUENCES = [
     ('OnePoolStreet1', 'outdoor'),

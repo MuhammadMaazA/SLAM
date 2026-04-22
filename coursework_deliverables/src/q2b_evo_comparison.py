@@ -29,14 +29,14 @@ SEQUENCES = [
     ('Basement_1',      'indoor',   283),
     ('Outdoor_1',       'outdoor',  360),
     ('Basement_2',      'indoor',   233),
-    ('BikeStorage',     'indoor',   561),
-    ('BikeStorage2',    'indoor',   194),
+    ('BikeStorage',     'outdoor',  561),
+    ('BikeStorage2',    'outdoor',  194),
     ('Washroom',        'indoor',   101),
-    ('Entrance2',       'mixed',    399),
+    ('Entrance2',       'outdoor',  399),
     ('Floor7_Hallway',  'indoor',   8),
 ]
 
-SEQ_COLORS = {'outdoor': '#ff6d00', 'indoor': '#00e5ff', 'mixed': '#76ff03'}
+SEQ_COLORS = {'outdoor': '#ff6d00', 'indoor': '#00e5ff'}
 
 
 def load_tum(path):

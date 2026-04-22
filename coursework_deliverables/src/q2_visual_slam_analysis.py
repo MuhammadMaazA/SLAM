@@ -22,8 +22,8 @@ COLMAP_DIR = os.path.join(BASE, 'q2_results', 'colmap_runs')
 OUT_DIR  = os.path.join(BASE, 'q2_results')
 os.makedirs(OUT_DIR, exist_ok=True)
 
-REC1 = os.environ.get('SLAM_REC1', '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings')
-REC2 = os.environ.get('SLAM_REC2', '/home/mmaaz/SLAM/extracted_data/tmp_recordings2')
+REC1 = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))
+REC2 = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
 
 # All 9 sequences with metadata
 SEQUENCES = {
@@ -32,9 +32,9 @@ SEQUENCES = {
     "Floor7_Hallway": {"rec": REC1, "type": "indoor",  "color": "#ff7f0e"},
     "Outdoor_1":      {"rec": REC1, "type": "outdoor", "color": "#2ca02c"},
     "Washroom":       {"rec": REC1, "type": "indoor",  "color": "#d62728"},
-    "BikeStorage":    {"rec": REC2, "type": "indoor",  "color": "#9467bd"},
-    "BikeStorage2":   {"rec": REC2, "type": "indoor",  "color": "#8c564b"},
-    "Entrance2":      {"rec": REC2, "type": "mixed",   "color": "#e377c2"},
+    "BikeStorage":    {"rec": REC2, "type": "outdoor", "color": "#9467bd"},
+    "BikeStorage2":   {"rec": REC2, "type": "outdoor", "color": "#8c564b"},
+    "Entrance2":      {"rec": REC2, "type": "outdoor", "color": "#e377c2"},
     "OnePoolStreet1": {"rec": REC2, "type": "outdoor", "color": "#17becf"},
 }
 
@@ -374,9 +374,8 @@ def plot_q2c(trajs):
     handles = [
         plt.Rectangle((0,0),1,1, fc="#1f77b4", alpha=0.85, label="indoor"),
         plt.Rectangle((0,0),1,1, fc="#2ca02c", alpha=0.85, label="outdoor"),
-        plt.Rectangle((0,0),1,1, fc="#e377c2", alpha=0.85, label="mixed"),
     ]
-    fig.legend(handles=handles, loc='lower center', ncol=3, fontsize=10, title="Environment type")
+    fig.legend(handles=handles, loc='lower center', ncol=2, fontsize=10, title="Environment type")
 
     plt.tight_layout(rect=[0, 0.04, 1, 1])
     out = f"{OUT_DIR}/q2c_statistics.png"

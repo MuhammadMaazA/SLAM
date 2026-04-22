@@ -2,12 +2,14 @@
 # Run ORB-SLAM2 mono_tum on all collected sequences
 # Results saved to q2_results/orbslam_runs/
 
-ORBSLAM=/home/mmaaz/ORB_SLAM2/Install/bin/mono_tum
-YAML_STD=/home/mmaaz/ORB_SLAM2/Install/etc/orbslam2/Monocular/RealSense_D455.yaml
-YAML_LOW=/home/mmaaz/ORB_SLAM2/Install/etc/orbslam2/Monocular/RealSense_D455_lowthresh.yaml
-REC1=/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings
-REC2=/home/mmaaz/SLAM/extracted_data/tmp_recordings2
-OUT=/home/mmaaz/SLAM/coursework_deliverables/data/q2_results/orbslam_runs
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ORBSLAM="${ORBSLAM:-$HOME/ORB_SLAM2/Install/bin/mono_tum}"
+YAML_STD="${YAML_STD:-$HOME/ORB_SLAM2/Install/etc/orbslam2/Monocular/RealSense_D455.yaml}"
+YAML_LOW="${YAML_LOW:-$HOME/ORB_SLAM2/Install/etc/orbslam2/Monocular/RealSense_D455_lowthresh.yaml}"
+REC1="${SLAM_REC1:-$HOME/SLAM/extracted_data/tmp_recordings/tmp_recordings}"
+REC2="${SLAM_REC2:-$HOME/SLAM/extracted_data/tmp_recordings2}"
+OUT="${SLAM_ORBSLAM_OUT:-$ROOT/data/q2_results/orbslam_runs}"
 mkdir -p "$OUT"
 
 run_seq() {

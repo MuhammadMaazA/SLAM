@@ -13,7 +13,7 @@ The demo:
      real drift to correct.
   3. Adds one loop-closure factor between the first and last pose with
      identity relative transform (the robot is physically back at start).
-  4. Runs BFGS on the negative log-likelihood sum and measures the closure
+  4. Runs SLSQP on the negative log-likelihood sum and measures the closure
      error before vs after.
 """
 
@@ -156,12 +156,12 @@ class FactorGraphOptimizer:
         return opt, True, 0  # success + iter count unused
 
     def _optimize_scipy(self, initial_poses, max_iterations):
-        """L-BFGS-B fallback (used only when GTSAM is unavailable)."""
+        """SLSQP fallback with equality constraint to fix pose 0 (used when GTSAM unavailable)."""
         initial_vec = np.array([self.pose_to_vector(P) for P in initial_poses])
         anchor_vec  = initial_vec[0]
         free0       = initial_vec[1:].flatten()
         result = minimize(self._objective, free0, args=(anchor_vec,),
-                          method='L-BFGS-B',
+                          method='SLSQP',
                           options={'maxiter': max_iterations, 'ftol': 1e-10})
         free_vec = result.x.reshape((len(initial_poses) - 1, 3))
         opt = [self.vector_to_pose(anchor_vec)] + \
@@ -172,9 +172,9 @@ class FactorGraphOptimizer:
         """
         Optimize pose graph. Pose 0 is held fixed (anchor).
         `backend` ∈ {'auto', 'gtsam', 'scipy'}:
-          - 'auto'  → GTSAM if importable, else SciPy L-BFGS-B
+          - 'auto'  → GTSAM if importable, else SciPy SLSQP
           - 'gtsam' → hard requirement on GTSAM
-          - 'scipy' → always use the SciPy fallback
+          - 'scipy' → always use the SciPy SLSQP fallback
         """
         before_poses = [P.copy() for P in initial_poses]
         before_error = self.calculate_closure_error(before_poses)

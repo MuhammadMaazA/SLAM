@@ -8,10 +8,13 @@ import os, sys, time
 import numpy as np
 import cv2
 
-SEQ       = 'OnePoolStreet1'
-CAM_DIR   = '/home/mmaaz/SLAM/extracted_data/tmp_recordings2/OnePoolStreet1/camera'
-TRAJ_FILE = '/home/mmaaz/SLAM/coursework_deliverables/data/q2_results/orbslam_runs/OnePoolStreet1_trajectory.txt'
-COLMAP    = '/home/mmaaz/SLAM/coursework_deliverables/data/q2_results/colmap_runs/OnePoolStreet1_colmap_poses.txt'
+_HERE     = os.path.dirname(os.path.abspath(__file__))
+_ROOT     = os.path.abspath(os.path.join(_HERE, '..'))
+_REC2     = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
+SEQ       = os.environ.get('SLAM_SEQ', 'OnePoolStreet1')
+CAM_DIR   = os.environ.get('SLAM_CAM_DIR',   os.path.join(_REC2, SEQ, 'camera'))
+TRAJ_FILE = os.environ.get('SLAM_TRAJ_FILE', os.path.join(_ROOT, 'data', 'q2_results', 'orbslam_runs', f'{SEQ}_trajectory.txt'))
+COLMAP    = os.environ.get('SLAM_COLMAP_FILE', os.path.join(_ROOT, 'data', 'q2_results', 'colmap_runs', f'{SEQ}_colmap_poses.txt'))
 
 FRAME_STEP = 6
 FPS_TARGET = 20

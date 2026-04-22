@@ -11,10 +11,12 @@ matplotlib.use('Agg')   # render to memory, NOT to display — cv2 handles the w
 import matplotlib.pyplot as plt
 import cv2
 
+_REC1 = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))
+_REC2 = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
 SEQS = {
-    'Basement_1':    '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Basement_1/lidar/scans.jsonl',
-    'Outdoor_1':     '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings/Outdoor_1/lidar/scans.jsonl',
-    'OnePoolStreet1':'/home/mmaaz/SLAM/extracted_data/tmp_recordings2/OnePoolStreet1/lidar/scans.jsonl',
+    'Basement_1':     os.path.join(_REC1, 'Basement_1',     'lidar', 'scans.jsonl'),
+    'Outdoor_1':      os.path.join(_REC1, 'Outdoor_1',      'lidar', 'scans.jsonl'),
+    'OnePoolStreet1': os.path.join(_REC2, 'OnePoolStreet1', 'lidar', 'scans.jsonl'),
 }
 MAX_SCANS = 250
 PAUSE_S   = 0.10

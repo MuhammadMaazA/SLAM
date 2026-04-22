@@ -7,10 +7,12 @@ Saves poses to data/q2_results/colmap_runs/{seq}_colmap_poses.txt
 import os, shutil, subprocess, json
 import numpy as np
 
-COLMAP = "/usr/bin/colmap"
-REC1 = "/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings"
-REC2 = "/home/mmaaz/SLAM/extracted_data/tmp_recordings2"
-OUT_DIR = "/home/mmaaz/SLAM/coursework_deliverables/data/q2_results/colmap_runs"
+_HERE   = os.path.dirname(os.path.abspath(__file__))
+_ROOT   = os.path.abspath(os.path.join(_HERE, '..'))
+COLMAP  = os.environ.get('COLMAP_BIN', '/usr/bin/colmap')
+REC1    = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))
+REC2    = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
+OUT_DIR = os.environ.get('SLAM_COLMAP_OUT', os.path.join(_ROOT, 'data', 'q2_results', 'colmap_runs'))
 os.makedirs(OUT_DIR, exist_ok=True)
 
 # Camera params (Intel RealSense D455)

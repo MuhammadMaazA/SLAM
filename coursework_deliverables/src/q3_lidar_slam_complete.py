@@ -34,8 +34,8 @@ except Exception as _e:
 # ============================================================
 _HERE    = os.path.dirname(os.path.abspath(__file__))
 _ROOT    = os.path.abspath(os.path.join(_HERE, '..'))
-REC1     = os.environ.get('SLAM_REC1', '/home/mmaaz/SLAM/extracted_data/tmp_recordings/tmp_recordings')
-REC2     = os.environ.get('SLAM_REC2', '/home/mmaaz/SLAM/extracted_data/tmp_recordings2')
+REC1     = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))
+REC2     = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
 OUT_DIR  = os.environ.get('SLAM_OUT',  os.path.join(_ROOT, 'data', 'q3_results'))
 os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -236,7 +236,8 @@ def build_occupancy_grid(trajectory_xyt, scans_xy_global,
             if 0 <= hx < N_cell and 0 <= hy < N_cell:
                 log_grid[hy, hx] += 0.85         # occupied
 
-    # Convert log-odds to image
+    # Convert log-odds to image (clip prevents overflow in np.exp)
+    log_grid = np.clip(log_grid, -20.0, 20.0)
     prob = 1.0 / (1.0 + np.exp(-log_grid))
     img  = np.full((N_cell, N_cell), 128, dtype=np.uint8)
     img[prob > 0.6]  = 0          # occupied → black
@@ -293,8 +294,18 @@ def run_slam(scans_raw, max_range_mm=4000.0, angular_step=1,
         # ICP against local map
         all_pts = np.vstack([k[0] for k in kf_buf])
         all_nrm = np.vstack([k[1] for k in kf_buf])
+        prev_pose = pose.copy()
         pose = icp_scan_to_map(pts, all_pts, all_nrm, pose,
                                 max_iter=icp_iter, corr_thresh=corr_thresh)
+
+        # Reject diverged ICP steps: RPLidar max range is 8 m so a single
+        # scan-to-scan motion > 2 m or > 45° is physically impossible.
+        step_dist = np.linalg.norm(pose[:2, 2] - prev_pose[:2, 2])
+        step_ang  = abs(np.arctan2(pose[1, 0], pose[0, 0]) -
+                        np.arctan2(prev_pose[1, 0], prev_pose[0, 0]))
+        step_ang  = min(step_ang, 2 * np.pi - step_ang)
+        if step_dist > 2.0 or step_ang > np.radians(45):
+            pose = prev_pose
 
         x, y  = pose[0, 2], pose[1, 2]
         theta = np.arctan2(pose[1, 0], pose[0, 0])
@@ -326,6 +337,98 @@ def run_slam(scans_raw, max_range_mm=4000.0, angular_step=1,
         'map_pts':     map_pts_all,
         'proc_times':  np.array(times) if times else np.array([0.0]),
     }
+
+
+# ============================================================
+# Q3a: TWO-LOOP VERIFICATION
+# ============================================================
+def _detect_laps(traj):
+    """
+    Detect lap boundaries by tracking cumulative unwrapped heading.
+    Each time the cumulative angle crosses a multiple of 2π, a new lap starts.
+    Returns list of frame indices where each lap begins (including 0).
+    """
+    if len(traj) < 4:
+        return [0]
+    thetas   = traj[:, 2]
+    unwrapped = np.unwrap(thetas)
+    total    = unwrapped[-1] - unwrapped[0]
+    if abs(total) < 0.5:
+        return [0]
+
+    lap_boundaries = [0]
+    sign = np.sign(total)
+    step = sign * 2 * np.pi
+    threshold = step
+    for i in range(1, len(unwrapped)):
+        delta = unwrapped[i] - unwrapped[0]
+        if sign > 0 and delta >= threshold:
+            lap_boundaries.append(i)
+            threshold += step
+        elif sign < 0 and delta <= threshold:
+            lap_boundaries.append(i)
+            threshold += step
+    return lap_boundaries
+
+
+def plot_two_loop_verification(seq_name, slam_result, out_dir):
+    """
+    Q3a verification: annotate trajectory with detected lap segments and
+    mark the start/end proximity (closure error).  Saves q3a_two_loop_<seq>.png.
+
+    Brief requirement: robot must complete EXACTLY two loops and return to start.
+    """
+    traj = slam_result['trajectory']
+    if len(traj) < 4:
+        print(f"  [Q3a] {seq_name}: too few poses, skipping")
+        return
+
+    laps  = _detect_laps(traj)
+    n_laps = len(laps) - 1 if len(laps) > 1 else 1
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+    fig.suptitle(f'Q3a Two-Loop Verification — {seq_name}\n'
+                 f'Detected {n_laps} lap(s), {len(traj)} poses',
+                 fontsize=12, fontweight='bold')
+
+    # Left: full trajectory coloured by lap segment
+    ax = axes[0]
+    colors_lap = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red', 'tab:purple']
+    segments = list(zip(laps, laps[1:] + [len(traj)]))
+    for seg_idx, (start, end) in enumerate(segments):
+        seg = traj[start:end]
+        c   = colors_lap[seg_idx % len(colors_lap)]
+        lbl = f'Lap {seg_idx + 1}'
+        ax.plot(seg[:, 0], seg[:, 1], color=c, lw=1.5, alpha=0.85, label=lbl)
+        ax.plot(*seg[0, :2], 'o', color=c, ms=7)
+    ax.plot(*traj[0, :2],  'g^', ms=12, zorder=5, label='Start')
+    ax.plot(*traj[-1, :2], 'rs', ms=12, zorder=5, label='End')
+    ce = np.hypot(traj[-1, 0] - traj[0, 0], traj[-1, 1] - traj[0, 1])
+    ax.set_title(f'Trajectory (closure error = {ce:.2f} m)', fontsize=10)
+    ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
+    ax.set_aspect('equal', adjustable='datalim')
+    ax.legend(fontsize=8); ax.grid(True, alpha=0.3)
+
+    # Right: cumulative heading to show loop completion
+    ax2 = axes[1]
+    unwrapped = np.unwrap(traj[:, 2])
+    ax2.plot(np.degrees(unwrapped), lw=1.5, color='steelblue')
+    for b in laps[1:]:
+        ax2.axvline(b, color='r', linestyle='--', alpha=0.6)
+    ax2.axhline(0,    color='k', linestyle=':', alpha=0.3)
+    ax2.axhline(360,  color='gray', linestyle=':', alpha=0.5, label='1 lap')
+    ax2.axhline(720,  color='gray', linestyle='--', alpha=0.5, label='2 laps')
+    ax2.axhline(-360, color='gray', linestyle=':', alpha=0.5)
+    ax2.axhline(-720, color='gray', linestyle='--', alpha=0.5)
+    ax2.set_xlabel('Frame'); ax2.set_ylabel('Cumulative heading (°)')
+    ax2.set_title('Heading unwrapped — red lines = lap boundaries', fontsize=10)
+    ax2.legend(fontsize=8); ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    out = os.path.join(out_dir, f'q3a_two_loop_{seq_name.lower()}.png')
+    plt.savefig(out, dpi=140, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: {out}")
 
 
 # ============================================================
@@ -962,6 +1065,9 @@ def main():
         print("Running baseline SLAM...")
         result = run_slam(scans, max_range_mm=4000.0)
         all_results[seq_name] = result
+
+        # --- Q3a: two-loop verification ---
+        plot_two_loop_verification(seq_name, result, OUT_DIR)
 
         # --- Q3b: parameter experiments ---
         run_q3b(seq_name, scans, OUT_DIR)

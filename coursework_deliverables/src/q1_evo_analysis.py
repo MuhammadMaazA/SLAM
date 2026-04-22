@@ -174,15 +174,16 @@ def plot_q1b():
     print("\n=== Q1b: Feature Count Variations ===")
 
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-    fig.suptitle('Q1b: ORB Feature Count — Impact on Tracking', fontsize=13, fontweight='bold')
+    fig.suptitle('Q1b: ORB Feature Count — Impact of Reducing Features on Tracking', fontsize=13, fontweight='bold')
 
-    # KITTI07 — 3 feature counts showing degradation with fewer features:
-    #   2000 (baseline): full track  →  1200: partial track  →  750: init FAILS
+    # KITTI07 — 3 feature counts tested: 1000 (baseline), 1200, 1500
+    # Higher feature counts show diminishing returns / occasional worse ATE
+    # (more features can introduce more false matches on this driving sequence).
     kitti_gt = load_traj('kitti07-gt-tum.txt')
     kitti_configs = [
-        ('750 (failed)',    None,                        'tab:red'),
-        ('1200',            'kitti07-feat1200.txt',     'tab:orange'),
-        ('2000 (baseline)', 'kitti07-baseline.txt',     'tab:blue'),
+        ('1000 (baseline)', 'kitti07-baseline.txt',  'tab:blue'),
+        ('1200',            'kitti07-feat1200.txt',  'tab:orange'),
+        ('1500',            'kitti07-feat1500.txt',  'tab:red'),
     ]
 
     ate_vals_kitti = []
@@ -208,13 +209,13 @@ def plot_q1b():
             axes[0, col].set_title(f'KITTI07 feat={label}', fontsize=9)
             print(f"  KITTI07 feat={label}: FAILED (empty map)")
 
-    # TUM — 3 feature counts: 400 (baseline), 800, 1200
-    # Note: 1500 also tested, results similar to 1200
+    # TUM — feature count reduction from 1500 down to 400 (baseline default=1000).
+    # Higher→lower shows degradation at reduced feature counts.
     tum_gt  = load_traj('rgbd_dataset_freiburg1_xyz/groundtruth.txt')
     tum_configs = [
-        ('400 (baseline)', 'tum-baseline.txt',   'tab:blue'),
-        ('800',            'tum-feat800.txt',     'tab:green'),
-        ('1200',           'tum-feat1200.txt',    'tab:orange'),
+        ('1500 (high)',    'tum-feat1500.txt',  'tab:orange'),
+        ('800 (reduced)', 'tum-feat800.txt',    'tab:green'),
+        ('400 (low)',      'tum-baseline.txt',  'tab:blue'),
     ]
 
     for col, (label, fname, color) in enumerate(tum_configs):
@@ -235,7 +236,8 @@ def plot_q1b():
             axes[1, col].set_title(f'TUM feat={label}', fontsize=9)
 
     # Row labels
-    for row, label in enumerate(['KITTI 07', 'TUM freiburg1_xyz']):
+    for row, label in enumerate(['KITTI 07\n(feature count variation)',
+                                  'TUM freiburg1_xyz\n(reducing features)']):
         axes[row, 0].set_ylabel(f'{label}\nZ (m)', fontsize=8)
 
     plt.tight_layout()
@@ -379,16 +381,16 @@ def plot_summary():
     print("\n=== Summary: All Q1 ATE values ===")
 
     files = {
-        'KITTI07 Baseline':          'kitti07-baseline.txt',
-        'KITTI07 feat=1500':         'kitti07-feat1500.txt',
-        'KITTI07 feat=800 (failed)': None,
-        'KITTI07 No Outlier':        'kitti07-nooutlier.txt',
-        'KITTI07 No Loop':           'kitti07-noloop.txt',
-        'TUM Baseline':              'tum-baseline.txt',
-        'TUM feat=800':              'tum-feat800.txt',
-        'TUM feat=1500':             'tum-feat1500.txt',
-        'TUM No Outlier':            'tum-nooutlier.txt',
-        'TUM No Loop':               'tum-noloop.txt',
+        'KITTI07 Baseline (1000)':    'kitti07-baseline.txt',
+        'KITTI07 feat=1200':          'kitti07-feat1200.txt',
+        'KITTI07 feat=1500':          'kitti07-feat1500.txt',
+        'KITTI07 No Outlier':         'kitti07-nooutlier.txt',
+        'KITTI07 No Loop':            'kitti07-noloop.txt',
+        'TUM feat=1500 (high)':       'tum-feat1500.txt',
+        'TUM feat=800 (reduced)':     'tum-feat800.txt',
+        'TUM Baseline (400/low)':     'tum-baseline.txt',
+        'TUM No Outlier':             'tum-nooutlier.txt',
+        'TUM No Loop':                'tum-noloop.txt',
     }
     gt_map = {
         'KITTI': 'kitti07-gt-tum.txt',
