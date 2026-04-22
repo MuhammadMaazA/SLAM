@@ -1,9 +1,5 @@
 %YAML:1.0
 
-# TUM monocular settings for the long Freiburg 3 sequence.
-# Kept under the old filename for compatibility with existing scripts.
-
-# Camera calibration and distortion parameters (OpenCV)
 Camera.fx: 535.4
 Camera.fy: 539.2
 Camera.cx: 320.1
@@ -14,20 +10,15 @@ Camera.k2: 0.0
 Camera.p1: 0.0
 Camera.p2: 0.0
 
-# Camera frames per second
 Camera.fps: 30.0
-
-# Color order of the images (0: BGR, 1: RGB. It is ignored if images are grayscale)
 Camera.RGB: 1
 
-# ORB Parameters
-ORBextractor.nFeatures: 1000
+ORBextractor.nFeatures: 800
 ORBextractor.scaleFactor: 1.2
 ORBextractor.nLevels: 8
 ORBextractor.iniThFAST: 20
 ORBextractor.minThFAST: 7
 
-# Viewer Parameters
 Viewer.KeyFrameSize: 0.05
 Viewer.KeyFrameLineWidth: 1
 Viewer.GraphLineWidth: 0.9

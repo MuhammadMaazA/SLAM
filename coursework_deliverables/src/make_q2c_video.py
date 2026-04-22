@@ -19,20 +19,17 @@ COLMAP_DIR  = os.environ.get('SLAM_COLMAP_OUT',  os.path.join(_ROOT, 'data', 'q2
 OUT_VIDEO   = os.environ.get('SLAM_VIDEO_Q2',    os.path.join(_ROOT, '..', 'COMP0222_CW2_GRP_32_Visual_SLAM.mp4'))
 
 SEQUENCES = [
-    ('OnePoolStreet1', 'outdoor'),
-    ('Outdoor_1',      'outdoor'),
-    ('Entrance2',      'mixed'),
-    ('Basement_1',     'indoor'),
     ('Basement_2',     'indoor'),
     ('Washroom',       'indoor'),
-    ('BikeStorage',    'indoor'),
-    ('BikeStorage2',   'indoor'),
     ('Floor7_Hallway', 'indoor'),
+    ('OnePoolStreet1', 'outdoor'),
+    ('Outdoor_1',      'outdoor'),
+    ('Entrance2',      'outdoor'),
 ]
-ENV_COLORS = {'outdoor': '#ff6d00', 'indoor': '#00e5ff', 'mixed': '#76ff03'}
+ENV_COLORS = {'outdoor': '#ff6d00', 'indoor': '#00e5ff'}
 
 FPS  = 15
-N_FRAMES = 300   # total animation frames → 20 s at 15fps
+N_FRAMES = 360   # 24 s at 15fps
 DPI  = 110
 
 
@@ -80,12 +77,12 @@ for seq, env in SEQUENCES:
 
 # ── Figure ────────────────────────────────────────────────────────────────────
 fig = plt.figure(figsize=(18, 12), facecolor='#0d1117', dpi=DPI)
-fig.suptitle('COMP0222 CW2 Group 1  |  ORB-SLAM2 Monocular SLAM  |  All Sequences',
+fig.suptitle('COMP0222 CW2 Group 32  |  ORB-SLAM2 Monocular SLAM  |  Best Sequences',
              color='white', fontsize=13, fontweight='bold', y=0.99)
 
 axes = []
-for i in range(9):
-    ax = fig.add_subplot(3, 3, i+1)
+for i in range(6):
+    ax = fig.add_subplot(2, 3, i+1)
     ax.set_facecolor('#0d1117')
     for sp in ax.spines.values(): sp.set_edgecolor('#2a2a2a')
     axes.append(ax)

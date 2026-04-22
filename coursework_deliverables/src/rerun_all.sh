@@ -3,8 +3,7 @@
 #  rerun_all.sh — regenerate every figure/result in one command.
 # -----------------------------------------------------------------------------
 # Tested against Ubuntu 22.04 with:
-#   - ORB-SLAM2 (built from the patched tree described in
-#     docs/ORB_SLAM2_MODIFICATIONS.md, installed under $ORBSLAM_ROOT)
+#   - ORB-SLAM2 (external install under $ORBSLAM_ROOT)
 #   - COLMAP >= 3.8 on $PATH
 #   - evo, gtsam, numpy, scipy, sklearn, matplotlib (see requirements.txt)
 #
@@ -21,6 +20,10 @@
 
 set -euo pipefail
 
+# Repository root (this script lives in src/, data/ is a sibling)
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$_SCRIPT_DIR/.." && pwd)"
+
 # ──────────────────────────────────────────────────────────────────────────────
 # USER CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
@@ -28,38 +31,33 @@ set -euo pipefail
 : "${ORBSLAM_ROOT:=$HOME/ORB_SLAM2/Install}"
 # Three ORB-SLAM2 binaries — baseline, no-outlier-rejection, no-loop-closure.
 # If you only built one tree, point all three at it and rely on the runtime
-# config (less clean — see docs/ORB_SLAM2_MODIFICATIONS.md).
+# config (less clean, but workable).
 : "${ORBSLAM_BIN_BASELINE:=$ORBSLAM_ROOT/bin/mono_kitti}"
 : "${ORBSLAM_BIN_NOOUT:=$ORBSLAM_ROOT/bin/mono_kitti_nooutlier}"
 : "${ORBSLAM_BIN_NOLOOP:=$ORBSLAM_ROOT/bin/mono_kitti_noloop}"
 : "${ORBSLAM_BIN_TUM_BASELINE:=$ORBSLAM_ROOT/bin/mono_tum}"
 : "${ORBSLAM_BIN_TUM_NOOUT:=$ORBSLAM_ROOT/bin/mono_tum_nooutlier}"
 : "${ORBSLAM_BIN_TUM_NOLOOP:=$ORBSLAM_ROOT/bin/mono_tum_noloop}"
-: "${ORBSLAM_VOCAB:=$ORBSLAM_ROOT/share/ORB_SLAM2/Vocabulary/ORBvoc.txt}"
-
 # Raw data roots
-: "${KITTI_SEQ_DIR:=$HOME/SLAM/datasets/kitti/07}"                           # KITTI07 image_2/
-: "${TUM_XYZ_DIR:=$HOME/SLAM/datasets/rgbd_dataset_freiburg1_xyz}"
-: "${TUM_LONG_DIR:=$HOME/SLAM/datasets/rgbd_dataset_freiburg3_long_office_household}"
+: "${KITTI_SEQ_DIR:=$HOME/SLAM/extracted_data/KITTI/dataset/sequences/07}"   # KITTI07 image_0/
+: "${TUM_XYZ_DIR:=$HOME/SLAM/datasets/TUM/rgbd_dataset_freiburg3_long_office_household}"
+: "${TUM_LONG_DIR:=$HOME/SLAM/datasets/TUM/rgbd_dataset_freiburg3_long_office_household}"
 : "${SLAM_REC1:=$HOME/SLAM/extracted_data/tmp_recordings/tmp_recordings}"
 : "${SLAM_REC2:=$HOME/SLAM/extracted_data/tmp_recordings2}"
 
 # YAMLs (baseline, per-experiment overrides). Feat-count overrides differ only
 # in the ORBextractor.nFeatures line.
-: "${KITTI_YAML:=$HOME/SLAM/configs/KITTI04-12_custom.yaml}"
-: "${KITTI_YAML_F1200:=$HOME/SLAM/configs/KITTI04-12_custom_f1200.yaml}"
-: "${KITTI_YAML_F1500:=$HOME/SLAM/configs/KITTI04-12_custom_f1500.yaml}"
-: "${TUM_XYZ_YAML:=$HOME/SLAM/configs/TUM1_custom.yaml}"
-: "${TUM_XYZ_YAML_F800:=$HOME/SLAM/configs/TUM1_custom_f800.yaml}"
-: "${TUM_XYZ_YAML_F1200:=$HOME/SLAM/configs/TUM1_custom_f1200.yaml}"
-: "${TUM_XYZ_YAML_F1500:=$HOME/SLAM/configs/TUM1_custom_f1500.yaml}"
-: "${TUM_LONG_YAML:=$HOME/SLAM/configs/TUM3_long.yaml}"
-: "${D455_YAML:=$HOME/SLAM/configs/RealSense_D455.yaml}"
-: "${D455_YAML_LOW:=$HOME/SLAM/configs/RealSense_D455_lowthresh.yaml}"
+: "${KITTI_YAML:=$REPO_ROOT/data/part1_analysis/KITTI04-12_custom.yaml}"
+: "${KITTI_YAML_F950:=$REPO_ROOT/data/part1_analysis/KITTI04-12_custom_f950.yaml}"
+: "${KITTI_YAML_F900:=$REPO_ROOT/data/part1_analysis/KITTI04-12_custom_f900.yaml}"
+: "${TUM_XYZ_YAML:=$REPO_ROOT/data/part1_analysis/TUM1_custom.yaml}"
+: "${TUM_XYZ_YAML_F800:=$REPO_ROOT/data/part1_analysis/TUM1_custom_f800.yaml}"
+: "${TUM_XYZ_YAML_F1200:=$REPO_ROOT/data/part1_analysis/TUM1_custom_f1200.yaml}"
+: "${TUM_XYZ_YAML_F1500:=$REPO_ROOT/data/part1_analysis/TUM1_custom_f1500.yaml}"
+: "${TUM_LONG_YAML:=$REPO_ROOT/data/part1_analysis/TUM1_custom.yaml}"
+: "${D455_YAML:=$REPO_ROOT/data/part1_analysis/RealSense_D455.yaml}"
+: "${D455_YAML_LOW:=$REPO_ROOT/data/part1_analysis/RealSense_D455_lowthresh.yaml}"
 
-# Repository root (this script lives in src/, data/ is a sibling)
-_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$_SCRIPT_DIR/.." && pwd)"
 DATA_DIR="$REPO_ROOT/data"
 LOG_DIR="$DATA_DIR/_rerun_logs"
 mkdir -p "$LOG_DIR"
@@ -93,19 +91,17 @@ step_mark() {
     local name=$1; touch "$LOG_DIR/.${name}.ok"
 }
 
-# Each orbslam_run() call invokes `mono_kitti`/`mono_tum` then moves
-# KeyFrameTrajectory.txt to the desired destination. If the output file is
-# empty we don't overwrite a previously successful run.
+# Each orbslam_run() call uses the coursework binaries' CLI:
+#   mono_* settings_file sequence_dir results_file
+# The binary writes the trajectory directly to the requested output path.
 orbslam_run() {
     local bin=$1 yaml=$2 seq_dir=$3 out_trajectory=$4
     need_file "$bin" || return 1
     need_file "$yaml" || return 1
     need_file "$seq_dir" || return 1
-    local tmp="$LOG_DIR/$(basename "$out_trajectory")"
-    (cd "$LOG_DIR" && "$bin" "$ORBSLAM_VOCAB" "$yaml" "$seq_dir") \
+    "$bin" "$yaml" "$seq_dir" "$out_trajectory" \
         > "$LOG_DIR/$(basename "$out_trajectory" .txt).stdout.log" 2>&1
-    if [[ -s "$LOG_DIR/KeyFrameTrajectory.txt" ]]; then
-        mv "$LOG_DIR/KeyFrameTrajectory.txt" "$out_trajectory"
+    if [[ -s "$out_trajectory" ]]; then
         local n
         n=$(wc -l < "$out_trajectory")
         log "  → $out_trajectory ($n poses)"
@@ -115,17 +111,17 @@ orbslam_run() {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Q1 — ORB-SLAM2 on KITTI07 & TUM (freiburg1_xyz + freiburg3_long)
+# Q1 — ORB-SLAM2 on KITTI07 & TUM long sequence
 # ──────────────────────────────────────────────────────────────────────────────
 q1_kitti() {
     local OUT="$DATA_DIR/part1_analysis"
     mkdir -p "$OUT"
     log "Q1 KITTI07 — baseline"
     orbslam_run "$ORBSLAM_BIN_BASELINE" "$KITTI_YAML"         "$KITTI_SEQ_DIR" "$OUT/kitti07-baseline.txt"
-    log "Q1 KITTI07 — feat=1200"
-    orbslam_run "$ORBSLAM_BIN_BASELINE" "$KITTI_YAML_F1200"   "$KITTI_SEQ_DIR" "$OUT/kitti07-feat1200.txt"
-    log "Q1 KITTI07 — feat=1500"
-    orbslam_run "$ORBSLAM_BIN_BASELINE" "$KITTI_YAML_F1500"   "$KITTI_SEQ_DIR" "$OUT/kitti07-feat1500.txt"
+    log "Q1 KITTI07 — feat=950"
+    orbslam_run "$ORBSLAM_BIN_BASELINE" "$KITTI_YAML_F950"    "$KITTI_SEQ_DIR" "$OUT/kitti07-feat950.txt"
+    log "Q1 KITTI07 — feat=900"
+    orbslam_run "$ORBSLAM_BIN_BASELINE" "$KITTI_YAML_F900"    "$KITTI_SEQ_DIR" "$OUT/kitti07-feat900.txt"
     log "Q1 KITTI07 — no outlier rejection"
     orbslam_run "$ORBSLAM_BIN_NOOUT"    "$KITTI_YAML"         "$KITTI_SEQ_DIR" "$OUT/kitti07-nooutlier.txt"
     log "Q1 KITTI07 — no loop closure"
@@ -134,22 +130,22 @@ q1_kitti() {
 
 q1_tum_xyz() {
     local OUT="$DATA_DIR/part1_analysis"
-    log "Q1 TUM freiburg1_xyz — baseline"
+    log "Q1 TUM freiburg3_long_office_household — baseline"
     orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$TUM_XYZ_YAML"        "$TUM_XYZ_DIR" "$OUT/tum-baseline.txt"
-    log "Q1 TUM freiburg1_xyz — feat=800"
+    log "Q1 TUM freiburg3_long_office_household — feat=800"
     orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$TUM_XYZ_YAML_F800"   "$TUM_XYZ_DIR" "$OUT/tum-feat800.txt"
-    log "Q1 TUM freiburg1_xyz — feat=1200"
+    log "Q1 TUM freiburg3_long_office_household — feat=1200"
     orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$TUM_XYZ_YAML_F1200"  "$TUM_XYZ_DIR" "$OUT/tum-feat1200.txt"
-    log "Q1 TUM freiburg1_xyz — feat=1500"
+    log "Q1 TUM freiburg3_long_office_household — feat=1500"
     orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$TUM_XYZ_YAML_F1500"  "$TUM_XYZ_DIR" "$OUT/tum-feat1500.txt"
-    log "Q1 TUM freiburg1_xyz — no outlier"
+    log "Q1 TUM freiburg3_long_office_household — no outlier"
     orbslam_run "$ORBSLAM_BIN_TUM_NOOUT"    "$TUM_XYZ_YAML"        "$TUM_XYZ_DIR" "$OUT/tum-nooutlier.txt"
-    log "Q1 TUM freiburg1_xyz — no loop"
+    log "Q1 TUM freiburg3_long_office_household — no loop"
     orbslam_run "$ORBSLAM_BIN_TUM_NOLOOP"   "$TUM_XYZ_YAML"        "$TUM_XYZ_DIR" "$OUT/tum-noloop.txt"
     # Copy ground-truth for convenient access
     if [[ -f "$TUM_XYZ_DIR/groundtruth.txt" ]]; then
-        mkdir -p "$OUT/rgbd_dataset_freiburg1_xyz"
-        cp -u "$TUM_XYZ_DIR/groundtruth.txt" "$OUT/rgbd_dataset_freiburg1_xyz/groundtruth.txt"
+        mkdir -p "$OUT/rgbd_dataset_freiburg3_long_office_household"
+        cp -u "$TUM_XYZ_DIR/groundtruth.txt" "$OUT/rgbd_dataset_freiburg3_long_office_household/groundtruth.txt"
     fi
 }
 
@@ -293,7 +289,7 @@ Usage: $0 [--dry-run] <step> [<step> ...]
 
 Available steps (run sequentially in listed order when "all"):
   q1_kitti              ORB-SLAM2 on KITTI07 (baseline + 4 ablations)
-  q1_tum_xyz            ORB-SLAM2 on TUM freiburg1_xyz (baseline + 5 ablations)
+  q1_tum_xyz            ORB-SLAM2 on TUM freiburg3_long_office_household (baseline + 5 ablations)
   q1_tum_long           ORB-SLAM2 on TUM freiburg3_long_office_household
   q1_evo_plots          Generate all Q1 EVO figures (ATE, RPE, summary)
   q2_orbslam            ORB-SLAM2 on 9 custom D455 sequences

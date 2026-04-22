@@ -132,7 +132,7 @@ def plot_q1a():
     print("\n=== Q1a: Baseline Evaluation ===")
     configs = [
         ('KITTI 07', 'kitti07-gt-tum.txt', 'kitti07-baseline.txt'),
-        ('TUM freiburg1_xyz', 'rgbd_dataset_freiburg1_xyz/groundtruth.txt',
+        ('TUM freiburg3_long_office_household', 'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt',
          'tum-baseline.txt'),
     ]
 
@@ -173,21 +173,23 @@ def plot_q1a():
 def plot_q1b():
     print("\n=== Q1b: Feature Count Variations ===")
 
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig, axes = plt.subplots(2, 4, figsize=(22, 10))
     fig.suptitle('Q1b: ORB Feature Count — Impact of Reducing Features on Tracking', fontsize=13, fontweight='bold')
 
-    # KITTI07 — 3 feature counts tested: 1000 (baseline), 1200, 1500
-    # Higher feature counts show diminishing returns / occasional worse ATE
-    # (more features can introduce more false matches on this driving sequence).
+    # KITTI07 — explicit feature-count reduction from the 1000-feature baseline.
     kitti_gt = load_traj('kitti07-gt-tum.txt')
     kitti_configs = [
         ('1000 (baseline)', 'kitti07-baseline.txt',  'tab:blue'),
-        ('1200',            'kitti07-feat1200.txt',  'tab:orange'),
-        ('1500',            'kitti07-feat1500.txt',  'tab:red'),
+        ('950 (reduced)',   'kitti07-feat950.txt',   'tab:orange'),
+        ('900 (reduced)',   'kitti07-feat900.txt',   'tab:red'),
+        (None, None, None),  # placeholder — only 3 KITTI runs
     ]
 
     ate_vals_kitti = []
     for col, (label, fname, color) in enumerate(kitti_configs):
+        if label is None:
+            axes[0, col].axis('off')
+            continue
         traj_est = load_traj(fname) if fname else None
         if traj_est is not None:
             stats, est_a, gt_a = compute_ate(traj_est, kitti_gt)
@@ -209,13 +211,14 @@ def plot_q1b():
             axes[0, col].set_title(f'KITTI07 feat={label}', fontsize=9)
             print(f"  KITTI07 feat={label}: FAILED (empty map)")
 
-    # TUM — feature count reduction from 1500 down to 400 (baseline default=1000).
-    # Higher→lower shows degradation at reduced feature counts.
-    tum_gt  = load_traj('rgbd_dataset_freiburg1_xyz/groundtruth.txt')
+    # TUM — compare a higher feature count against the corrected 1000-feature
+    # baseline and a reduced-count run on the long sequence.
+    tum_gt  = load_traj('rgbd_dataset_freiburg3_long_office_household/groundtruth.txt')
     tum_configs = [
-        ('1500 (high)',    'tum-feat1500.txt',  'tab:orange'),
-        ('800 (reduced)', 'tum-feat800.txt',    'tab:green'),
-        ('400 (low)',      'tum-baseline.txt',  'tab:blue'),
+        ('800 (reduced)',  'tum-feat800.txt',   'tab:green'),
+        ('1000 (baseline)','tum-baseline.txt',  'tab:blue'),
+        ('1200 (high)',    'tum-feat1200.txt',  'tab:orange'),
+        ('1500 (high)',    'tum-feat1500.txt',  'tab:red'),
     ]
 
     for col, (label, fname, color) in enumerate(tum_configs):
@@ -236,8 +239,8 @@ def plot_q1b():
             axes[1, col].set_title(f'TUM feat={label}', fontsize=9)
 
     # Row labels
-    for row, label in enumerate(['KITTI 07\n(feature count variation)',
-                                  'TUM freiburg1_xyz\n(reducing features)']):
+    for row, label in enumerate(['KITTI 07\n(feature count variation — 950/900 fail to init)',
+                                  'TUM freiburg3_long\n(feature count: 800 → 1000 → 1200 → 1500)']):
         axes[row, 0].set_ylabel(f'{label}\nZ (m)', fontsize=8)
 
     plt.tight_layout()
@@ -258,7 +261,7 @@ def plot_q1c():
 
     pairs = [
         ('KITTI 07',            'kitti07-gt-tum.txt', 'kitti07-baseline.txt',   'kitti07-nooutlier.txt'),
-        ('TUM freiburg1_xyz',   'rgbd_dataset_freiburg1_xyz/groundtruth.txt',
+        ('TUM freiburg3_long_office_household',   'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt',
                                  'tum-baseline.txt',    'tum-nooutlier.txt'),
     ]
 
@@ -323,7 +326,7 @@ def plot_q1d():
 
     pairs = [
         ('KITTI 07', 'kitti07-gt-tum.txt', 'kitti07-baseline.txt', 'kitti07-noloop.txt'),
-        ('TUM freiburg1_xyz', 'rgbd_dataset_freiburg1_xyz/groundtruth.txt',
+        ('TUM freiburg3_long_office_household', 'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt',
          'tum-baseline.txt', 'tum-noloop.txt'),
     ]
 
@@ -382,19 +385,19 @@ def plot_summary():
 
     files = {
         'KITTI07 Baseline (1000)':    'kitti07-baseline.txt',
-        'KITTI07 feat=1200':          'kitti07-feat1200.txt',
-        'KITTI07 feat=1500':          'kitti07-feat1500.txt',
+        'KITTI07 feat=950 (reduced)': 'kitti07-feat950.txt',
+        'KITTI07 feat=900 (reduced)': 'kitti07-feat900.txt',
         'KITTI07 No Outlier':         'kitti07-nooutlier.txt',
         'KITTI07 No Loop':            'kitti07-noloop.txt',
         'TUM feat=1500 (high)':       'tum-feat1500.txt',
         'TUM feat=800 (reduced)':     'tum-feat800.txt',
-        'TUM Baseline (400/low)':     'tum-baseline.txt',
+        'TUM Baseline (1000)':        'tum-baseline.txt',
         'TUM No Outlier':             'tum-nooutlier.txt',
         'TUM No Loop':                'tum-noloop.txt',
     }
     gt_map = {
         'KITTI': 'kitti07-gt-tum.txt',
-        'TUM':   'rgbd_dataset_freiburg1_xyz/groundtruth.txt',
+        'TUM':   'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt',
     }
 
     kitti_gt = load_traj(gt_map['KITTI'])
@@ -436,7 +439,7 @@ def plot_summary():
 
     from matplotlib.patches import Patch
     ax.legend(handles=[Patch(facecolor='steelblue', label='KITTI07'),
-                        Patch(facecolor='tomato',    label='TUM freiburg1_xyz')],
+                        Patch(facecolor='tomato',    label='TUM freiburg3_long_office_household')],
               fontsize=9)
     plt.tight_layout()
     out = os.path.join(OUT, 'q1_summary.png')
@@ -459,19 +462,20 @@ def plot_q1_rpe():
 
     configs = {
         'KITTI07 Baseline':   ('kitti07-baseline.txt',   'kitti07-gt-tum.txt'),
-        'KITTI07 feat=1500':  ('kitti07-feat1500.txt',   'kitti07-gt-tum.txt'),
+        'KITTI07 feat=950':   ('kitti07-feat950.txt',    'kitti07-gt-tum.txt'),
+        'KITTI07 feat=900':   ('kitti07-feat900.txt',    'kitti07-gt-tum.txt'),
         'KITTI07 No Outlier': ('kitti07-nooutlier.txt',  'kitti07-gt-tum.txt'),
         'KITTI07 No Loop':    ('kitti07-noloop.txt',     'kitti07-gt-tum.txt'),
         'TUM Baseline':       ('tum-baseline.txt',
-                                'rgbd_dataset_freiburg1_xyz/groundtruth.txt'),
+                                'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt'),
         'TUM feat=800':       ('tum-feat800.txt',
-                                'rgbd_dataset_freiburg1_xyz/groundtruth.txt'),
+                                'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt'),
         'TUM feat=1500':      ('tum-feat1500.txt',
-                                'rgbd_dataset_freiburg1_xyz/groundtruth.txt'),
+                                'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt'),
         'TUM No Outlier':     ('tum-nooutlier.txt',
-                                'rgbd_dataset_freiburg1_xyz/groundtruth.txt'),
+                                'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt'),
         'TUM No Loop':        ('tum-noloop.txt',
-                                'rgbd_dataset_freiburg1_xyz/groundtruth.txt'),
+                                'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt'),
     }
 
     labels, rmses, medians, baseline_curves = [], [], [], {}

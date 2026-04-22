@@ -27,7 +27,18 @@ try:
     _HAVE_GTSAM = True
 except Exception as _e:
     _HAVE_GTSAM = False
-    print(f"[WARN] GTSAM unavailable ({_e}); falling back to scipy SLSQP optimiser.")
+    import sys
+    print(
+        "\n" + "=" * 72 + "\n"
+        "  WARNING: GTSAM not found — Q3d factor-graph will use the SciPy\n"
+        "  SLSQP fallback instead of the Levenberg-Marquardt GTSAM solver.\n"
+        "  Results (closure error reduction, occupancy grid) will differ\n"
+        "  from the submitted figures which were generated with GTSAM.\n"
+        "  Install: pip install gtsam>=4.3\n"
+        "  Error detail: " + str(_e) + "\n"
+        "=" * 72 + "\n",
+        file=sys.stderr
+    )
 
 # ============================================================
 # PATHS
@@ -599,7 +610,9 @@ def detect_loop_closures(kf_poses, kf_scans_global,
         pj = kf_poses[j]
         xj, yj = pj[0, 2], pj[1, 2]
 
-        for i in range(n - j + min_separation - 1):
+        # Only compare against sufficiently older keyframes. The previous
+        # range expression could include invalid future indices for small j.
+        for i in range(0, j - min_separation + 1):
             pi = kf_poses[i]
             xi, yi = pi[0, 2], pi[1, 2]
             dist_ij = np.hypot(xj - xi, yj - yi)

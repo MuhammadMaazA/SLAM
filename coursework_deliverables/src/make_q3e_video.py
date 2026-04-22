@@ -18,20 +18,14 @@ _REC2 = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM'
 
 SEQUENCES = {
     'Basement_1':     os.path.join(_REC1, 'Basement_1',     'lidar', 'scans.jsonl'),
-    'Outdoor_1':      os.path.join(_REC1, 'Outdoor_1',      'lidar', 'scans.jsonl'),
-    'Basement_2':     os.path.join(_REC1, 'Basement_2',     'lidar', 'scans.jsonl'),
     'Floor7_Hallway': os.path.join(_REC1, 'Floor7_Hallway', 'lidar', 'scans.jsonl'),
-    'Washroom':       os.path.join(_REC1, 'Washroom',       'lidar', 'scans.jsonl'),
-    'BikeStorage':    os.path.join(_REC2, 'BikeStorage',    'lidar', 'scans.jsonl'),
-    'BikeStorage2':   os.path.join(_REC2, 'BikeStorage2',   'lidar', 'scans.jsonl'),
-    'Entrance2':      os.path.join(_REC2, 'Entrance2',      'lidar', 'scans.jsonl'),
-    'OnePoolStreet1': os.path.join(_REC2, 'OnePoolStreet1', 'lidar', 'scans.jsonl'),
+    'Outdoor_1':      os.path.join(_REC1, 'Outdoor_1',      'lidar', 'scans.jsonl'),
 }
 OUT_VIDEO = os.environ.get('SLAM_VIDEO_Q3', os.path.join(_ROOT, '..', 'COMP0222_CW2_GRP_32_LiDAR_SLAM.mp4'))
-MAX_SCANS = 300
+MAX_SCANS = 500
 MAX_RANGE = 4000
-FPS       = 10
-N_FRAMES  = 300   # 30 s at 10fps
+FPS       = 15
+N_FRAMES  = 360   # 24 s at 15fps
 DPI       = 100
 
 SEQ_COLORS = [
@@ -122,9 +116,9 @@ n = len(slam_data)
 print(f"\nLoaded {n} sequences. Rendering {N_FRAMES} frames at {FPS}fps...")
 
 # ── Figure ─────────────────────────────────────────────────────────────────────
-nrows, ncols = 3, 3
-fig, axes = plt.subplots(nrows, ncols, figsize=(18, 12), facecolor='#080808', dpi=DPI)
-fig.suptitle('COMP0222 CW2 Group 1  |  LiDAR SLAM  |  All 9 Sequences  |  ICP + Loop Closure',
+nrows, ncols = 1, 3
+fig, axes = plt.subplots(nrows, ncols, figsize=(18, 7), facecolor='#080808', dpi=DPI)
+fig.suptitle('COMP0222 CW2 Group 32  |  LiDAR SLAM  |  ICP Odometry + Loop Closure + Factor Graph',
              color='white', fontsize=13, fontweight='bold', y=0.99)
 axes = axes.flatten()
 for ax in axes:

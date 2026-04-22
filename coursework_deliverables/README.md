@@ -20,9 +20,6 @@ coursework_deliverables/
 │   ├── part1_analysis/   # Q1: KITTI/TUM trajectory dumps + GT
 │   ├── q2_results/       # Q2: ORB-SLAM2 + COLMAP outputs, comparison PNGs
 │   └── q3_results/       # Q3: LiDAR plots & occupancy grids
-├── docs/
-│   ├── ORB_SLAM2_MODIFICATIONS.md        # Q1c/Q1d source diffs
-│   └── ...
 ├── requirements.txt
 └── README.md
 ```
@@ -36,10 +33,16 @@ Python ≥ 3.10 is required. All Python deps are pinned in
 pip install -r requirements.txt
 ```
 
-`gtsam` ships as a manylinux/macOS wheel; no additional build step is needed.
-ORB-SLAM2 and COLMAP are external C++ binaries — see
-`docs/ORB_SLAM2_MODIFICATIONS.md` for the exact ORB-SLAM2 build flags used in
-Q1c / Q1d.
+`gtsam` (≥ 4.3) ships as a manylinux/macOS wheel; **Q3d factor-graph results
+were generated with GTSAM** and the script falls back to a SciPy SLSQP solver
+when GTSAM is absent — the fallback produces different (worse) closure errors.
+Install it explicitly first:
+
+```bash
+pip install gtsam>=4.3
+```
+
+ORB-SLAM2 and COLMAP are external C++ binaries (not vendored in this repo).
 
 ## Environment variables
 
@@ -73,9 +76,9 @@ chmod +x src/rerun_all.sh
 Per-step stdout/stderr is captured under `data/_rerun_logs/` and a
 `.<step>.ok` marker is written on success.
 
-**Full walkthrough (prerequisites, dataset layout, YAML configs, expected
-runtime, common issues, sanity checks):** see
-[`docs/RERUN_INSTRUCTIONS.md`](docs/RERUN_INSTRUCTIONS.md).
+**Walkthrough note:** detailed ORB-SLAM2 build notes were kept out of this
+repo; `src/rerun_all.sh` is the authoritative entry point for reproducing
+outputs when you have the external datasets/binaries locally.
 
 ### Python-only (no external binaries)
 
@@ -119,5 +122,4 @@ coursework results were generated with GTSAM.
   via `SLAM_REC1` / `SLAM_REC2`.
 - KITTI / TUM raw images and groundtruth — downloaded at evaluation time; only
   the ORB-SLAM2 trajectory dumps are included.
-- ORB-SLAM2 binary — see `docs/ORB_SLAM2_MODIFICATIONS.md` for the build
-  recipe and source patches.
+- ORB-SLAM2 binary — not included (external install required).
