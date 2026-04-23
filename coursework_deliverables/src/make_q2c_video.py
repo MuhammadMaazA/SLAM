@@ -19,12 +19,9 @@ COLMAP_DIR  = os.environ.get('SLAM_COLMAP_OUT',  os.path.join(_ROOT, 'data', 'q2
 OUT_VIDEO   = os.environ.get('SLAM_VIDEO_Q2',    os.path.join(_ROOT, '..', 'COMP0222_CW2_GRP_32_Visual_SLAM.mp4'))
 
 SEQUENCES = [
-    ('Basement_2',     'indoor'),
-    ('Washroom',       'indoor'),
+    ('Basement_1',     'indoor'),
     ('Floor7_Hallway', 'indoor'),
-    ('OnePoolStreet1', 'outdoor'),
     ('Outdoor_1',      'outdoor'),
-    ('Entrance2',      'outdoor'),
 ]
 ENV_COLORS = {'outdoor': '#ff6d00', 'indoor': '#00e5ff'}
 
@@ -76,13 +73,13 @@ for seq, env in SEQUENCES:
     print(f"  {seq}: ORB={len(orb)} poses, COLMAP={len(colm)} pts")
 
 # ── Figure ────────────────────────────────────────────────────────────────────
-fig = plt.figure(figsize=(18, 12), facecolor='#0d1117', dpi=DPI)
-fig.suptitle('COMP0222 CW2 Group 32  |  ORB-SLAM2 Monocular SLAM  |  Best Sequences',
+fig = plt.figure(figsize=(18, 7), facecolor='#0d1117', dpi=DPI)
+fig.suptitle('COMP0222 CW2 Group 32  |  ORB-SLAM2 Monocular SLAM  |  Basement_1 / Floor7_Hallway / Outdoor_1',
              color='white', fontsize=13, fontweight='bold', y=0.99)
 
 axes = []
-for i in range(6):
-    ax = fig.add_subplot(2, 3, i+1)
+for i in range(3):
+    ax = fig.add_subplot(1, 3, i+1)
     ax.set_facecolor('#0d1117')
     for sp in ax.spines.values(): sp.set_edgecolor('#2a2a2a')
     axes.append(ax)
