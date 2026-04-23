@@ -1,6 +1,6 @@
 %YAML:1.0
 
-# KITTI monocular settings with a reduced 900-feature ORB extractor.
+# KITTI monocular settings with a meaningfully reduced 500-feature ORB extractor.
 
 Camera.fx: 707.0912
 Camera.fy: 707.0912
@@ -15,7 +15,7 @@ Camera.p2: 0.0
 Camera.fps: 10.0
 Camera.RGB: 1
 
-ORBextractor.nFeatures: 900
+ORBextractor.nFeatures: 500
 ORBextractor.scaleFactor: 1.2
 ORBextractor.nLevels: 8
 ORBextractor.iniThFAST: 20

@@ -15,8 +15,13 @@ REC2    = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLA
 OUT_DIR = os.environ.get('SLAM_COLMAP_OUT', os.path.join(_ROOT, 'data', 'q2_results', 'colmap_runs'))
 os.makedirs(OUT_DIR, exist_ok=True)
 
-# Camera params (Intel RealSense D455)
+# Camera params (Intel RealSense D455 factory calibration)
 CAM_PARAMS = "426.675,426.104,425.341,247.517,-0.0554,0.0644,-0.00105,0.000458"
+
+# Scratch-mode env vars: set COLMAP_SCRATCH=1 to run one sequence with
+# SIMPLE_PINHOLE and no factory prior (genuine calibration from images).
+SCRATCH_MODE = os.environ.get('COLMAP_SCRATCH', '0') == '1'
+SCRATCH_SEQ  = os.environ.get('COLMAP_SCRATCH_SEQ', 'Basement_1')
 
 SEQUENCES = {
     # Indoor — every 15th frame (2fps, shorter baseline step for more coverage)
@@ -159,15 +164,101 @@ def run_colmap_sequence(seq_name, cam_dir, stride):
     return True, len(poses)
 
 
-if __name__ == "__main__":
-    results = {}
-    for seq_name, (cam_dir, stride) in SEQUENCES.items():
-        ok, n = run_colmap_sequence(seq_name, cam_dir, stride)
-        results[seq_name] = {"success": ok, "poses": n}
+def run_colmap_scratch(seq_name):
+    """Run COLMAP on one sequence with SIMPLE_PINHOLE and no factory prior.
 
-    print("\n" + "="*60)
-    print("COLMAP Summary:")
-    for seq, r in results.items():
-        status = f"{r['poses']} poses" if r['success'] else "FAILED"
-        print(f"  {seq:<20}: {status}")
-    print(f"\nResults in: {OUT_DIR}")
+    Saves the sparse model's cameras.txt to OUT_DIR/{seq_name}_scratch_sparse/
+    so that estimated intrinsics can be compared against factory values.
+    """
+    print(f"\n{'='*60}")
+    print(f"COLMAP SCRATCH (no factory prior): {seq_name}")
+
+    if seq_name not in SEQUENCES:
+        print(f"  Unknown sequence: {seq_name}"); return
+
+    cam_dir, stride = SEQUENCES[seq_name]
+    scratch_out = os.path.join(OUT_DIR, f"{seq_name}_scratch_sparse")
+    os.makedirs(scratch_out, exist_ok=True)
+
+    kf_dir  = f"/tmp/colmap_scratch_kf/{seq_name}"
+    db_path = f"/tmp/colmap_scratch_db/{seq_name}.db"
+    sp_dir  = f"/tmp/colmap_scratch_sp/{seq_name}"
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    os.makedirs(sp_dir, exist_ok=True)
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+    n_kf, _ = extract_keyframes(cam_dir, stride, kf_dir)
+    print(f"  Keyframes: {n_kf}")
+    if n_kf < 10:
+        print("  SKIP: too few keyframes"); return
+
+    # Feature extraction with SIMPLE_PINHOLE, no prior
+    r = subprocess.run([COLMAP, "feature_extractor",
+        "--database_path", db_path,
+        "--image_path", kf_dir,
+        "--ImageReader.camera_model", "SIMPLE_PINHOLE",
+        "--ImageReader.single_camera", "1",
+        "--SiftExtraction.use_gpu", "0"],
+        capture_output=True, text=True)
+    print(f"  Feature extraction: {'ok' if r.returncode == 0 else 'FAILED'}")
+
+    r = subprocess.run([COLMAP, "exhaustive_matcher",
+        "--database_path", db_path,
+        "--SiftMatching.use_gpu", "0"],
+        capture_output=True, text=True)
+    print(f"  Matching: {'ok' if r.returncode == 0 else 'FAILED'}")
+
+    r = subprocess.run([COLMAP, "mapper",
+        "--database_path", db_path,
+        "--image_path", kf_dir,
+        "--output_path", sp_dir,
+        "--Mapper.init_min_num_inliers", "30",
+        "--Mapper.abs_pose_min_num_inliers", "15"],
+        capture_output=True, text=True)
+    failed = "failed to create sparse model" in (r.stdout + r.stderr)
+    print(f"  Mapper: {'FAILED' if failed else 'ok'}")
+    if failed:
+        return
+
+    model_dir = os.path.join(sp_dir, "0")
+    subprocess.run([COLMAP, "model_converter",
+        "--input_path", model_dir,
+        "--output_path", model_dir,
+        "--output_type", "TXT"],
+        capture_output=True, text=True)
+
+    import shutil
+    for fname in ("cameras.txt", "images.txt", "points3D.txt"):
+        src = os.path.join(model_dir, fname)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(scratch_out, fname))
+
+    cameras_txt = os.path.join(scratch_out, "cameras.txt")
+    if os.path.exists(cameras_txt):
+        print(f"\n  cameras.txt → {cameras_txt}")
+        print("  Estimated intrinsics (SIMPLE_PINHOLE: f cx cy):")
+        with open(cameras_txt) as fh:
+            for line in fh:
+                if not line.startswith("#") and line.strip():
+                    print(f"    {line.rstrip()}")
+        fx_fac = 426.675
+        cx_fac, cy_fac = 425.341, 247.517
+        print(f"  Factory D455 (OPENCV):  fx={fx_fac}  cx={cx_fac}  cy={cy_fac}")
+
+
+if __name__ == "__main__":
+    if SCRATCH_MODE:
+        run_colmap_scratch(SCRATCH_SEQ)
+    else:
+        results = {}
+        for seq_name, (cam_dir, stride) in SEQUENCES.items():
+            ok, n = run_colmap_sequence(seq_name, cam_dir, stride)
+            results[seq_name] = {"success": ok, "poses": n}
+
+        print("\n" + "="*60)
+        print("COLMAP Summary:")
+        for seq, r in results.items():
+            status = f"{r['poses']} poses" if r['success'] else "FAILED"
+            print(f"  {seq:<20}: {status}")
+        print(f"\nResults in: {OUT_DIR}")

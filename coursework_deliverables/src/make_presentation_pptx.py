@@ -189,10 +189,8 @@ sl = blank_slide(prs)
 title_bar(sl, 'Q2b — COLMAP vs ORB-SLAM2 Trajectories',
           'EVO APE with Umeyama alignment and scale correction')
 add_image(sl, os.path.join(Q2, 'q2b_colmap_vs_orbslam.png'),
-          0.2, 1.3, 8.2, 5.8)
-add_image(sl, os.path.join(Q2, 'q2b_summary_table.png'),
-          8.6, 1.3, 4.5, 2.6)
-card(sl, 8.6, 4.1, 4.5, 3.0, 'Interpretation', [
+          0.2, 1.3, 8.5, 5.8)
+card(sl, 8.9, 1.3, 4.2, 5.8, 'Interpretation', [
     'Basement_1: 0.036 m — very close',
     'Outdoor_1: 0.262 m — acceptable',
     'OnePoolStreet1: 3.0 m — scale drift',

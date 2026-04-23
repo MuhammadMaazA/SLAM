@@ -48,12 +48,13 @@ REPO_ROOT="$(cd "$_SCRIPT_DIR/.." && pwd)"
 # YAMLs (baseline, per-experiment overrides). Feat-count overrides differ only
 # in the ORBextractor.nFeatures line.
 : "${KITTI_YAML:=$REPO_ROOT/data/part1_analysis/KITTI04-12_custom.yaml}"
-: "${KITTI_YAML_F950:=$REPO_ROOT/data/part1_analysis/KITTI04-12_custom_f950.yaml}"
-: "${KITTI_YAML_F900:=$REPO_ROOT/data/part1_analysis/KITTI04-12_custom_f900.yaml}"
+: "${KITTI_YAML_F500:=$REPO_ROOT/data/part1_analysis/KITTI04-12_custom_f500.yaml}"
+: "${KITTI_YAML_F250:=$REPO_ROOT/data/part1_analysis/KITTI04-12_custom_f250.yaml}"
+: "${KITTI_YAML_F100:=$REPO_ROOT/data/part1_analysis/KITTI04-12_custom_f100.yaml}"
 : "${TUM_XYZ_YAML:=$REPO_ROOT/data/part1_analysis/TUM1_custom.yaml}"
+: "${TUM_XYZ_YAML_F250:=$REPO_ROOT/data/part1_analysis/TUM1_custom_f250.yaml}"
+: "${TUM_XYZ_YAML_F500:=$REPO_ROOT/data/part1_analysis/TUM1_custom_f500.yaml}"
 : "${TUM_XYZ_YAML_F800:=$REPO_ROOT/data/part1_analysis/TUM1_custom_f800.yaml}"
-: "${TUM_XYZ_YAML_F1200:=$REPO_ROOT/data/part1_analysis/TUM1_custom_f1200.yaml}"
-: "${TUM_XYZ_YAML_F1500:=$REPO_ROOT/data/part1_analysis/TUM1_custom_f1500.yaml}"
 : "${TUM_LONG_YAML:=$REPO_ROOT/data/part1_analysis/TUM1_custom.yaml}"
 : "${D455_YAML:=$REPO_ROOT/data/part1_analysis/RealSense_D455.yaml}"
 : "${D455_YAML_LOW:=$REPO_ROOT/data/part1_analysis/RealSense_D455_lowthresh.yaml}"
@@ -118,10 +119,12 @@ q1_kitti() {
     mkdir -p "$OUT"
     log "Q1 KITTI07 — baseline"
     orbslam_run "$ORBSLAM_BIN_BASELINE" "$KITTI_YAML"         "$KITTI_SEQ_DIR" "$OUT/kitti07-baseline.txt"
-    log "Q1 KITTI07 — feat=950"
-    orbslam_run "$ORBSLAM_BIN_BASELINE" "$KITTI_YAML_F950"    "$KITTI_SEQ_DIR" "$OUT/kitti07-feat950.txt"
-    log "Q1 KITTI07 — feat=900"
-    orbslam_run "$ORBSLAM_BIN_BASELINE" "$KITTI_YAML_F900"    "$KITTI_SEQ_DIR" "$OUT/kitti07-feat900.txt"
+    log "Q1 KITTI07 — feat=500"
+    orbslam_run "$ORBSLAM_BIN_BASELINE" "$KITTI_YAML_F500"    "$KITTI_SEQ_DIR" "$OUT/kitti07-feat500.txt"
+    log "Q1 KITTI07 — feat=250"
+    orbslam_run "$ORBSLAM_BIN_BASELINE" "$KITTI_YAML_F250"    "$KITTI_SEQ_DIR" "$OUT/kitti07-feat250.txt"
+    log "Q1 KITTI07 — feat=100"
+    orbslam_run "$ORBSLAM_BIN_BASELINE" "$KITTI_YAML_F100"    "$KITTI_SEQ_DIR" "$OUT/kitti07-feat100.txt"
     log "Q1 KITTI07 — no outlier rejection"
     orbslam_run "$ORBSLAM_BIN_NOOUT"    "$KITTI_YAML"         "$KITTI_SEQ_DIR" "$OUT/kitti07-nooutlier.txt"
     log "Q1 KITTI07 — no loop closure"
@@ -132,12 +135,12 @@ q1_tum_xyz() {
     local OUT="$DATA_DIR/part1_analysis"
     log "Q1 TUM freiburg3_long_office_household — baseline"
     orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$TUM_XYZ_YAML"        "$TUM_XYZ_DIR" "$OUT/tum-baseline.txt"
+    log "Q1 TUM freiburg3_long_office_household — feat=250"
+    orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$TUM_XYZ_YAML_F250"   "$TUM_XYZ_DIR" "$OUT/tum-feat250.txt"
+    log "Q1 TUM freiburg3_long_office_household — feat=500"
+    orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$TUM_XYZ_YAML_F500"   "$TUM_XYZ_DIR" "$OUT/tum-feat500.txt"
     log "Q1 TUM freiburg3_long_office_household — feat=800"
     orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$TUM_XYZ_YAML_F800"   "$TUM_XYZ_DIR" "$OUT/tum-feat800.txt"
-    log "Q1 TUM freiburg3_long_office_household — feat=1200"
-    orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$TUM_XYZ_YAML_F1200"  "$TUM_XYZ_DIR" "$OUT/tum-feat1200.txt"
-    log "Q1 TUM freiburg3_long_office_household — feat=1500"
-    orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$TUM_XYZ_YAML_F1500"  "$TUM_XYZ_DIR" "$OUT/tum-feat1500.txt"
     log "Q1 TUM freiburg3_long_office_household — no outlier"
     orbslam_run "$ORBSLAM_BIN_TUM_NOOUT"    "$TUM_XYZ_YAML"        "$TUM_XYZ_DIR" "$OUT/tum-nooutlier.txt"
     log "Q1 TUM freiburg3_long_office_household — no loop"
@@ -185,6 +188,15 @@ q2_colmap() {
     log "Q2 COLMAP sparse reconstructions"
     need_bin colmap || return 1
     run "$PYTHON $REPO_ROOT/src/run_colmap_all.py"
+}
+
+q2_colmap_scratch() {
+    # Run COLMAP on one sequence with SIMPLE_PINHOLE and no factory prior,
+    # so that calibration is derived purely from the images.
+    local SEQ="${COLMAP_SCRATCH_SEQ:-Basement_1}"
+    log "Q2a COLMAP scratch calibration (${SEQ}, SIMPLE_PINHOLE, no prior)"
+    need_bin colmap || return 1
+    run "COLMAP_SCRATCH=1 COLMAP_SCRATCH_SEQ=${SEQ} $PYTHON $REPO_ROOT/src/run_colmap_all.py"
 }
 
 q2_colmap_intrinsics() {
@@ -264,7 +276,6 @@ q2_python_plots() {
 q3_python() {
     log "Q3 LiDAR SLAM (ICP, Q3b sweep, Q3c loop, Q3d GTSAM PGO)"
     run "$PYTHON $REPO_ROOT/src/q3_lidar_slam_complete.py"
-    run "$PYTHON $REPO_ROOT/src/factor_graph_optimization.py"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -294,6 +305,7 @@ Available steps (run sequentially in listed order when "all"):
   q1_evo_plots          Generate all Q1 EVO figures (ATE, RPE, summary)
   q2_orbslam            ORB-SLAM2 on 9 custom D455 sequences
   q2_colmap             COLMAP sparse reconstruction on all sequences
+  q2_colmap_scratch     COLMAP on one sequence with SIMPLE_PINHOLE + no factory prior (genuine calibration)
   q2_colmap_intrinsics  Derive ORB-SLAM2 YAML from COLMAP intrinsics, re-run
   q2_python_plots       Q2 visual / EVO / 3D point-cloud figures
   q3_python             Q3 LiDAR SLAM + factor-graph figures

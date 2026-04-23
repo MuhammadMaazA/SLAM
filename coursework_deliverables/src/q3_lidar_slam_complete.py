@@ -64,8 +64,9 @@ SEQUENCES = {
     'OnePoolStreet1':  os.path.join(REC2, 'OnePoolStreet1', 'lidar', 'scans.jsonl'),
 }
 
-# RPLidar A1M8 maximum rated range (mm)
-SENSOR_MAX_RANGE_MM = 8000.0
+# RPLidar A1 maximum rated range (mm). Actual scan data reaches ~14 000 mm in
+# open spaces; the A1 nominal spec is 12 000 mm.
+SENSOR_MAX_RANGE_MM = 12000.0
 
 # Blind spot: operator stands 135–225 degrees
 BLIND_SPOT_MIN = 135.0
@@ -621,20 +622,27 @@ def detect_loop_closures(kf_poses, kf_scans_global,
                 continue
 
             # ICP refinement between keyframe scans
-            src = kf_scans_global[j]
             ref = kf_scans_global[i]
-            if src is None or ref is None or len(src) < 8 or len(ref) < 8:
+            if kf_scans_global[j] is None or ref is None or len(kf_scans_global[j]) < 8 or len(ref) < 8:
                 continue
+
+            # icp_scan_to_map expects src in the sensor/local frame; kf_scans_global
+            # stores points in the world frame, so transform j's scan back to j's body frame.
+            src_world_h = np.vstack([kf_scans_global[j].T, np.ones(len(kf_scans_global[j]))])
+            src_local   = (np.linalg.inv(pj) @ src_world_h)[:2].T
 
             ref_nrm = estimate_normals_pca(ref)
             nn = NearestNeighbors(n_neighbors=1).fit(ref)
-            init  = np.linalg.inv(pi) @ pj
-            T_rel = icp_scan_to_map(src, ref, ref_nrm, init,
-                                     max_iter=15, corr_thresh=icp_corr_thresh)
+            init       = np.linalg.inv(pi) @ pj
+            pj_refined = icp_scan_to_map(src_local, ref, ref_nrm, init,
+                                         max_iter=15, corr_thresh=icp_corr_thresh)
 
-            # Score = fraction of src points within threshold of ref
-            src_h   = np.vstack([src.T, np.ones(len(src))])
-            aligned = (T_rel @ src_h)[:2].T
+            # T_rel = Pose_i^{-1} · Pose_j_refined — exactly what BetweenFactorPose2 expects.
+            T_rel = np.linalg.inv(pi) @ pj_refined
+
+            # Score = fraction of j's points (world frame) within threshold of ref
+            src_local_h = np.vstack([src_local.T, np.ones(len(src_local))])
+            aligned = (pj_refined @ src_local_h)[:2].T
             dists, _ = nn.kneighbors(aligned, return_distance=True)
             score = float((dists.ravel() < icp_corr_thresh).mean())
 

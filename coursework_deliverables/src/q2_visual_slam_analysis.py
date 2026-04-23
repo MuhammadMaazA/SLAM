@@ -169,8 +169,8 @@ def plot_q2b(trajs):
 
     # Figure layout: left = method comparison table, right = trajectory plots for colmap successes
     fig = plt.figure(figsize=(18, 14))
-    fig.suptitle("Q2b – COLMAP vs ORB-SLAM2: Structure-from-Motion Comparison",
-                 fontsize=14, fontweight='bold')
+    fig.suptitle("Q2b – COLMAP vs ORB-SLAM2: Visual Overview (unaligned; see q2b_colmap_vs_orbslam.png for EVO ATE)",
+                 fontsize=12, fontweight='bold')
     gs = gridspec.GridSpec(3, 3, figure=fig, hspace=0.45, wspace=0.35)
 
     # --- Method comparison summary table ---
@@ -192,12 +192,15 @@ def plot_q2b(trajs):
         elif not os.path.exists(path):
             col_result = "Not run yet"
 
-        rows.append([name, meta["type"], str(orb_poses), str(col_poses) if col_poses else "–", col_result])
+        orb_label = f"{orb_poses} ⚠ TRACKING FAIL" if orb_poses < 500 else str(orb_poses)
+        rows.append([name, meta["type"], orb_label, str(col_poses) if col_poses else "–", col_result])
 
     cell_colors = [["#d0e4f7"] * 5]
     for i, row in enumerate(rows[1:]):
         ok = row[4] not in ("Failed", "Not run yet", "Failed (insufficient baseline)")
-        cell_colors.append(["white"] * 4 + [("#d0f0d0" if ok else "#ffe0e0")])
+        orb_fail = "TRACKING FAIL" in row[2]
+        row_color = "#fff0f0" if orb_fail else "white"
+        cell_colors.append([row_color] * 4 + [("#d0f0d0" if ok else "#ffe0e0")])
 
     table = ax_table.table(cellText=rows[1:], colLabels=rows[0],
                            cellLoc='center', loc='center',
@@ -275,9 +278,9 @@ def plot_q2b(trajs):
                 bbox=dict(boxstyle='round', facecolor='whitesmoke'))
 
     # NOTE: EVO-based ATE/rot comparison (with alignment + scaling) lives in
-    # `q2b_evo_comparison.py`. This figure intentionally uses a different
-    # filename so the two scripts do not overwrite each other.
-    out = f"{OUT_DIR}/q2b_summary_table.png"
+    # `q2b_evo_comparison.py` and outputs q2b_colmap_vs_orbslam.png (cite that one).
+    # This figure is an unaligned visual overview only — named to avoid confusion.
+    out = f"{OUT_DIR}/q2_visual_overview.png"
     fig.savefig(out, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"  saved → {out}")

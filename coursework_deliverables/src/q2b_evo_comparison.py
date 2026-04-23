@@ -38,6 +38,9 @@ SEQUENCES = [
 ]
 
 SEQ_COLORS = {'outdoor': '#ff6d00', 'indoor': '#00e5ff'}
+# Sequences with fewer ORB-SLAM2 poses than this are flagged as tracking failures
+# per the brief's 500-frame threshold.
+MIN_ORB_POSES = 500
 SEQUENCE_CAMERA_DIRS = {
     "Basement_1":     os.path.join(REC1, "Basement_1", "camera"),
     "Basement_2":     os.path.join(REC1, "Basement_2", "camera"),
@@ -235,10 +238,12 @@ def main():
         ate_rot = ate['rot']['rmse']   if ate else float('nan')
         ate_full= ate['full']['rmse']  if ate else float('nan')
         n_assoc = len(ref_aligned.timestamps) if ref_aligned is not None else 0
+        tracking_failed = len(orb_xyz) < MIN_ORB_POSES
         results[seq] = {
             'env': env,
             'n_colmap': len(colmap_xyz), 'n_orb': len(orb_xyz),
             'n_assoc': n_assoc,
+            'tracking_failed': tracking_failed,
             'ate_rmse':     ate_t,
             'ate_rot_deg':  ate_rot,
             'ate_full':     ate_full,
@@ -275,7 +280,8 @@ def main():
     for seq, r in results.items():
         def _fmt(v, prec=4):
             return f"{v:.{prec}f}" if (v is not None and not np.isnan(v)) else 'N/A'
-        rows.append([seq, r['env'], str(r['n_colmap']), str(r['n_orb']), str(r['n_assoc']),
+        seq_label = f"{seq} ⚠ TRACKING FAIL" if r.get('tracking_failed') else seq
+        rows.append([seq_label, r['env'], str(r['n_colmap']), str(r['n_orb']), str(r['n_assoc']),
                       _fmt(r['ate_rmse']),
                       _fmt(r['ate_rot_deg'], 2),
                       _fmt(r['ate_full'])])
@@ -306,7 +312,13 @@ def main():
                        f"rot={r['ate_rot_deg']:.1f}°")
         else:
             ate_str = "ATE: N/A"
-        ax.set_title(f"{seq}\n{ate_str}  |  matched={r['n_assoc']}", fontsize=8)
+        title_suffix = f"\n{ate_str}  |  matched={r['n_assoc']}"
+        if r.get('tracking_failed'):
+            ax.set_title(f"{seq} — TRACKING FAILURE ({r['n_orb']} poses < {MIN_ORB_POSES} threshold)"
+                         + title_suffix, fontsize=7, color='red')
+            ax.set_facecolor('#fff0f0')
+        else:
+            ax.set_title(f"{seq}{title_suffix}", fontsize=8)
         ax.set_xlabel('X (m)', fontsize=7)
         ax.set_ylabel('Z (m)', fontsize=7)
         ax.legend(fontsize=6)

@@ -13,7 +13,7 @@ Camera.p2: 0.0
 Camera.fps: 30.0
 Camera.RGB: 1
 
-ORBextractor.nFeatures: 1500
+ORBextractor.nFeatures: 500
 ORBextractor.scaleFactor: 1.2
 ORBextractor.nLevels: 8
 ORBextractor.iniThFAST: 20

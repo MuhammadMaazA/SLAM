@@ -174,15 +174,19 @@ def plot_q1b():
     print("\n=== Q1b: Feature Count Variations ===")
 
     fig, axes = plt.subplots(2, 4, figsize=(22, 10))
-    fig.suptitle('Q1b: ORB Feature Count — Impact of Reducing Features on Tracking', fontsize=13, fontweight='bold')
+    fig.suptitle(
+        'Q1b: ORB Feature Count — Impact of Reducing Features on Tracking\n'
+        'KITTI07: all reductions fail (fast motion → sparse matches → RANSAC init threshold not met; verified by run logs)\n'
+        'TUM: 250 fails, 500 partial (1152/2557 poses), 800 full with 3× drift vs baseline',
+        fontsize=11, fontweight='bold')
 
     # KITTI07 — explicit feature-count reduction from the 1000-feature baseline.
     kitti_gt = load_traj('kitti07-gt-tum.txt')
     kitti_configs = [
         ('1000 (baseline)', 'kitti07-baseline.txt',  'tab:blue'),
-        ('950 (reduced)',   'kitti07-feat950.txt',   'tab:orange'),
-        ('900 (reduced)',   'kitti07-feat900.txt',   'tab:red'),
-        (None, None, None),  # placeholder — only 3 KITTI runs
+        ('500 (reduced)',   'kitti07-feat500.txt',   'tab:orange'),
+        ('250 (reduced)',   'kitti07-feat250.txt',   'tab:red'),
+        ('100 (reduced)',   'kitti07-feat100.txt',   'tab:purple'),
     ]
 
     ate_vals_kitti = []
@@ -204,7 +208,7 @@ def plot_q1b():
         else:
             ate_vals_kitti.append(float('nan'))
             axes[0, col].text(0.5, 0.5,
-                              f'feat={label}\nInitialization\nFailed',
+                              f'feat={label}\nInitialization\nFailed\n(log verified)',
                               ha='center', va='center',
                               transform=axes[0, col].transAxes,
                               fontsize=12, color='red', fontweight='bold')
@@ -215,10 +219,10 @@ def plot_q1b():
     # baseline and a reduced-count run on the long sequence.
     tum_gt  = load_traj('rgbd_dataset_freiburg3_long_office_household/groundtruth.txt')
     tum_configs = [
-        ('800 (reduced)',  'tum-feat800.txt',   'tab:green'),
+        ('250 (reduced)',  'tum-feat250.txt',   'tab:purple'),
+        ('500 (reduced)',  'tum-feat500.txt',   'tab:green'),
+        ('800 (reduced)',  'tum-feat800.txt',   'tab:orange'),
         ('1000 (baseline)','tum-baseline.txt',  'tab:blue'),
-        ('1200 (high)',    'tum-feat1200.txt',  'tab:orange'),
-        ('1500 (high)',    'tum-feat1500.txt',  'tab:red'),
     ]
 
     for col, (label, fname, color) in enumerate(tum_configs):
@@ -233,14 +237,16 @@ def plot_q1b():
                             color=color,
                             title=f'TUM feat={label}')
         else:
-            axes[1, col].text(0.5, 0.5, f'feat={label}\nNo data',
+            axes[1, col].text(0.5, 0.5,
+                              f'feat={label}\nInitialization\nFailed\n(log verified)',
                               ha='center', va='center',
-                              transform=axes[1, col].transAxes, fontsize=10)
+                              transform=axes[1, col].transAxes,
+                              fontsize=12, color='red', fontweight='bold')
             axes[1, col].set_title(f'TUM feat={label}', fontsize=9)
 
     # Row labels
-    for row, label in enumerate(['KITTI 07\n(feature count variation — 950/900 fail to init)',
-                                  'TUM freiburg3_long\n(feature count: 800 → 1000 → 1200 → 1500)']):
+    for row, label in enumerate(['KITTI 07\n(feature count reduction: 1000 → 500 → 250 → 100)',
+                                  'TUM freiburg3_long\n(feature count reduction: 250 → 500 → 800 → 1000)']):
         axes[row, 0].set_ylabel(f'{label}\nZ (m)', fontsize=8)
 
     plt.tight_layout()
@@ -385,11 +391,13 @@ def plot_summary():
 
     files = {
         'KITTI07 Baseline (1000)':    'kitti07-baseline.txt',
-        'KITTI07 feat=950 (reduced)': 'kitti07-feat950.txt',
-        'KITTI07 feat=900 (reduced)': 'kitti07-feat900.txt',
+        'KITTI07 feat=500 (reduced)': 'kitti07-feat500.txt',
+        'KITTI07 feat=250 (reduced)': 'kitti07-feat250.txt',
+        'KITTI07 feat=100 (reduced)': 'kitti07-feat100.txt',
         'KITTI07 No Outlier':         'kitti07-nooutlier.txt',
         'KITTI07 No Loop':            'kitti07-noloop.txt',
-        'TUM feat=1500 (high)':       'tum-feat1500.txt',
+        'TUM feat=250 (reduced)':     'tum-feat250.txt',
+        'TUM feat=500 (reduced)':     'tum-feat500.txt',
         'TUM feat=800 (reduced)':     'tum-feat800.txt',
         'TUM Baseline (1000)':        'tum-baseline.txt',
         'TUM No Outlier':             'tum-nooutlier.txt',
@@ -462,15 +470,18 @@ def plot_q1_rpe():
 
     configs = {
         'KITTI07 Baseline':   ('kitti07-baseline.txt',   'kitti07-gt-tum.txt'),
-        'KITTI07 feat=950':   ('kitti07-feat950.txt',    'kitti07-gt-tum.txt'),
-        'KITTI07 feat=900':   ('kitti07-feat900.txt',    'kitti07-gt-tum.txt'),
+        'KITTI07 feat=500':   ('kitti07-feat500.txt',    'kitti07-gt-tum.txt'),
+        'KITTI07 feat=250':   ('kitti07-feat250.txt',    'kitti07-gt-tum.txt'),
+        'KITTI07 feat=100':   ('kitti07-feat100.txt',    'kitti07-gt-tum.txt'),
         'KITTI07 No Outlier': ('kitti07-nooutlier.txt',  'kitti07-gt-tum.txt'),
         'KITTI07 No Loop':    ('kitti07-noloop.txt',     'kitti07-gt-tum.txt'),
         'TUM Baseline':       ('tum-baseline.txt',
                                 'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt'),
-        'TUM feat=800':       ('tum-feat800.txt',
+        'TUM feat=250':       ('tum-feat250.txt',
                                 'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt'),
-        'TUM feat=1500':      ('tum-feat1500.txt',
+        'TUM feat=500':       ('tum-feat500.txt',
+                                'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt'),
+        'TUM feat=800':       ('tum-feat800.txt',
                                 'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt'),
         'TUM No Outlier':     ('tum-nooutlier.txt',
                                 'rgbd_dataset_freiburg3_long_office_household/groundtruth.txt'),
