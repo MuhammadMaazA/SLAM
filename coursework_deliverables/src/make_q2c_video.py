@@ -120,9 +120,9 @@ fig.suptitle(
     color='white', fontsize=12, fontweight='bold', y=0.995)
 
 gs = gridspec.GridSpec(2, 3, figure=fig,
-                       hspace=0.06, wspace=0.05,
+                       hspace=0.08, wspace=0.05,
                        top=0.96, bottom=0.04, left=0.03, right=0.97,
-                       height_ratios=[1.1, 1.0])
+                       height_ratios=[2.2, 1.0])
 
 cam_axes  = [fig.add_subplot(gs[0, i]) for i in range(3)]
 traj_axes = [fig.add_subplot(gs[1, i]) for i in range(3)]
@@ -176,27 +176,31 @@ for frame in range(N_FRAMES):
         colm = d['colmap']
         n_show = max(2, int(progress * len(xyz))) if len(xyz) else 0
 
-        # COLMAP reference (faint)
-        if len(colm) >= 2:
-            ax_tr.scatter(colm[:, 0], colm[:, 2],
-                          c='#404040', s=2, alpha=0.5, zorder=1, label='COLMAP')
-
-        # ORB-SLAM2 trajectory
+        # ORB-SLAM2 trajectory — draw first so its extent sets axis limits
         if n_show >= 2:
             sub = xyz[:n_show]
             ax_tr.plot(sub[:, 0], sub[:, 2],
-                       color=color, lw=2.0, alpha=0.95, zorder=3)
-            ax_tr.plot(sub[0, 0],  sub[0, 2],  'o', color='#00ff88', ms=7, zorder=5)
-            ax_tr.plot(sub[-1, 0], sub[-1, 2], 's', color='#ff3333', ms=7, zorder=5)
+                       color=color, lw=2.5, alpha=0.95, zorder=3)
+            ax_tr.plot(sub[0, 0],  sub[0, 2],  'o', color='#00ff88', ms=9, zorder=5)
+            ax_tr.plot(sub[-1, 0], sub[-1, 2], 's', color='#ff3333', ms=9, zorder=5)
+            # Fix axis limits to ORB trajectory with 15% padding
+            xpad = max((sub[:, 0].max() - sub[:, 0].min()) * 0.15, 0.3)
+            zpad = max((sub[:, 2].max() - sub[:, 2].min()) * 0.15, 0.3)
+            ax_tr.set_xlim(sub[:, 0].min() - xpad, sub[:, 0].max() + xpad)
+            ax_tr.set_ylim(sub[:, 2].min() - zpad, sub[:, 2].max() + zpad)
+
+        # COLMAP reference — faint, added after limits are fixed
+        if len(colm) >= 5:
+            ax_tr.scatter(colm[:, 0], colm[:, 2],
+                          c='#555555', s=3, alpha=0.5, zorder=1)
 
         pct = 100 * n_show / max(len(xyz), 1)
         ax_tr.set_title(
             f'ORB-SLAM2  {n_show}/{len(xyz)} poses ({pct:.0f}%)',
-            color='#aaa', fontsize=7.5, pad=2)
-        ax_tr.tick_params(colors='#555', labelsize=5)
-        ax_tr.set_aspect('equal', adjustable='datalim')
-        ax_tr.set_xlabel('X (m)', color='#666', fontsize=6)
-        ax_tr.set_ylabel('Z (m)', color='#666', fontsize=6)
+            color='#aaa', fontsize=8, pad=3)
+        ax_tr.tick_params(colors='#555', labelsize=6)
+        ax_tr.set_xlabel('X (m)', color='#666', fontsize=7)
+        ax_tr.set_ylabel('Z (m)', color='#666', fontsize=7)
 
     fig.canvas.draw()
     buf = fig.canvas.buffer_rgba()
