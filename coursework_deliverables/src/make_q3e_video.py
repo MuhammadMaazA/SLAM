@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Q3e: LiDAR SLAM mapping demonstration — all 9 sequences in 3×3 grid.
-Shows trajectory + point cloud building simultaneously across all environments.
-Output: COMP0222_CW2_GRP_1_LiDAR_SLAM.mp4
+Q3e: LiDAR SLAM mapping demonstration — all three Q3 sequences in a 1x3 grid.
+Shows trajectory + point cloud building simultaneously across environments.
+Uses the same SLAM pipeline as the Q3 analysis (run_slam from
+q3_lidar_slam_complete) so the visualisation matches the reported numbers.
+Output: COMP0222_CW2_GRP_32_LiDAR_SLAM.mp4
 """
 import json, os, sys
 import numpy as np
@@ -13,6 +15,13 @@ import cv2
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, '..'))
+sys.path.insert(0, _HERE)
+from q3_lidar_slam_complete import (      # noqa: E402
+    run_slam as q3_run_slam,
+    load_scans as q3_load_scans,
+    detect_loop_closures as q3_detect_loops,
+)
+
 _REC1 = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))
 _REC2 = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
 
@@ -22,8 +31,7 @@ SEQUENCES = {
     'Outdoor_1':      os.path.join(_REC1, 'Outdoor_1',      'lidar', 'scans.jsonl'),
 }
 OUT_VIDEO = os.environ.get('SLAM_VIDEO_Q3', os.path.join(_ROOT, '..', 'COMP0222_CW2_GRP_32_LiDAR_SLAM.mp4'))
-MAX_SCANS = 500
-MAX_RANGE = 4000
+MAX_SCANS = 1500
 FPS       = 15
 N_FRAMES  = 360   # 24 s at 15fps
 DPI       = 100
@@ -34,71 +42,26 @@ SEQ_COLORS = [
 ]
 
 
-def parse_scan(raw, max_mm=MAX_RANGE, step=2):
-    pts = []
-    for q, ang_deg, dist_mm in raw:
-        if q < 5 or dist_mm < 50 or dist_mm > max_mm: continue
-        a = np.radians(ang_deg)
-        pts.append([dist_mm * np.cos(a) / 1000., dist_mm * np.sin(a) / 1000.])
-    pts = np.array(pts) if pts else np.zeros((0, 2))
-    return pts[::step] if step > 1 and len(pts) else pts
-
-
-def icp_step(src, dst):
-    from sklearn.neighbors import KDTree
-    if len(src) < 5 or len(dst) < 5: return np.eye(3)
-    T = np.eye(3); s = src.copy()
-    tree = KDTree(dst)
-    for _ in range(8):
-        d, idx = tree.query(s, k=1)
-        mask = d[:, 0] < 0.4
-        if mask.sum() < 4: break
-        m = dst[idx[mask, 0]]; sc = s[mask]
-        H = (sc - sc.mean(0)).T @ (m - m.mean(0))
-        U, _, Vt = np.linalg.svd(H)
-        R = Vt.T @ np.diag([1, np.sign(np.linalg.det(Vt.T @ U.T))]) @ U.T
-        t = m.mean(0) - R @ sc.mean(0)
-        s = (R @ s.T).T + t
-        dT = np.eye(3); dT[:2, :2] = R; dT[:2, 2] = t
-        T = dT @ T
-        if np.linalg.norm(t) < 5e-4: break
-    return T
-
-
-def apply_T(T, pts):
-    if not len(pts): return pts
-    h = np.ones((len(pts), 3)); h[:, :2] = pts
-    return (T @ h.T).T[:, :2]
-
-
 def run_slam(name, path):
+    """Thin wrapper around the Q3 pipeline that returns trajectory + global
+    map points + loop-closure indices in the representation the video loop
+    expects."""
     print(f"  SLAM: {name}...")
-    scans_raw = []
-    with open(path) as f:
-        for line in f:
-            try: scans_raw.append(json.loads(line)['points'])
-            except: pass
-    scans_raw = scans_raw[:MAX_SCANS]
-
-    poses = [np.array([0., 0.])]; T_world = np.eye(3)
-    map_pts = []; ref = None; loops = []
-    for i, raw in enumerate(scans_raw):
-        pts = parse_scan(raw)
-        if len(pts) < 8: continue
-        if ref is None:
-            ref = pts; map_pts.extend(apply_T(T_world, pts).tolist()); continue
-        T = icp_step(pts, ref)
-        T_world = T_world @ np.linalg.inv(T)
-        pose = T_world[:2, 2].copy()
-        poses.append(pose)
-        map_pts.extend(apply_T(T_world, pts).tolist())
-        ref = pts
-        if i > len(scans_raw)//3 and np.linalg.norm(pose) < 0.8:
-            loops.append(i)
-    print(f"    {len(poses)} poses, {len(loops)} loop events")
-    return (np.array(poses),
-            np.array(map_pts) if map_pts else np.zeros((0, 2)),
-            loops)
+    scans = q3_load_scans(path, max_scans=MAX_SCANS)
+    result = q3_run_slam(scans, max_range_mm=4000.0)
+    traj   = result['trajectory']              # (N, 3) [x, y, theta]
+    poses  = traj[:, :2]                       # (N, 2)
+    # Flatten per-keyframe global points into a single (M, 2) array
+    kf_pts = result['map_pts']
+    map_pts = (np.vstack(kf_pts) if kf_pts else np.zeros((0, 2)))
+    # Loop closures from the full pipeline (keyframe indices -> scan indices)
+    closures = q3_detect_loops(result['kf_poses'], kf_pts)
+    kf_n = max(1, len(result['kf_poses']))
+    scan_per_kf = max(1, len(traj) // kf_n)
+    loops = [min(lc[1] * scan_per_kf, len(traj) - 1) for lc in closures]
+    print(f"    {len(poses)} poses, {len(loops)} loop events, "
+          f"{len(result['kf_poses'])} keyframes")
+    return poses, map_pts, loops
 
 
 # ── Run SLAM for all sequences ─────────────────────────────────────────────────
@@ -154,7 +117,9 @@ for frame in range(N_FRAMES):
 
         n_show = max(2, int(progress * len(poses)))
         p_show = poses[:n_show]
-        m_show = map_pts[:n_show*8] if len(map_pts) else np.zeros((0, 2))
+        # Reveal map points in proportion to playback (not n_show*8 heuristic).
+        n_map = int(progress * len(map_pts)) if len(map_pts) else 0
+        m_show = map_pts[:max(0, n_map)] if len(map_pts) else np.zeros((0, 2))
 
         # Map point cloud
         if len(m_show) > 0:

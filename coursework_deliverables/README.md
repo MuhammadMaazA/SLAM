@@ -15,6 +15,8 @@ coursework_deliverables/
 │   ├── q2b_evo_comparison.py             # Q2b: COLMAP vs ORB-SLAM2 (EVO)
 │   ├── q3_lidar_slam_complete.py         # Q3b/Q3c/Q3d: LiDAR SLAM + PGO
 │   ├── factor_graph_optimization.py      # Reference-only (synthetic demo)
+│   ├── generate_orb_yaml_from_colmap.py  # COLMAP cameras.txt → ORB-SLAM2 YAML
+│   ├── merge_coursework_videos.py        # ffmpeg: Q2c + Q3e → one MP4
 │   └── run_orbslam_all.sh                # Batch ORB-SLAM2 runner (Linux)
 ├── data/
 │   ├── part1_analysis/   # Q1: KITTI/TUM trajectory dumps + GT
@@ -55,13 +57,17 @@ Every script uses environment variables to locate raw data. Defaults point at
 | `SLAM_OUT`   | Output directory override              | `./data/<q>_results`    |
 | `SLAM_REC1`  | RPLidar recording set #1 (Q3)          | `/home/.../tmp_recordings`    |
 | `SLAM_REC2`  | RPLidar recording set #2 (Q3)          | `/home/.../tmp_recordings2`   |
+| `SLAM_VIDEO_Q2` / `SLAM_VIDEO_Q3` / `SLAM_VIDEO_MERGED` | Paths for `merge_coursework_videos.py` | sibling of `coursework_deliverables/` |
+| `Q2B_INCLUDE_SHORT_ORB` | Include ORB runs with fewer than 500 poses in the Q2b EVO figure | unset (exclude) |
 
 ## Reproduce the figures
 
 ### One-shot (Linux, recommended)
 
 `src/rerun_all.sh` is an idempotent driver that rebuilds every result from
-raw data (ORB-SLAM2 runs, COLMAP runs, Python analysis, factor-graph PGO).
+raw data (ORB-SLAM2 runs, COLMAP runs, Python analysis, factor-graph PGO, the
+synthetic GN demo PNG, and optional ffmpeg merge of Q2c/Q3e videos when those
+MP4s exist).
 Edit the `USER CONFIG` block at the top of the script to point at your local
 ORB-SLAM2 install / KITTI / TUM / D455 recordings, then:
 
@@ -92,6 +98,9 @@ python src/q2b_evo_comparison.py       # Q2b COLMAP vs ORB-SLAM2 (EVO)
 python src/q2_pointcloud_3d.py         # Q2b 3D COLMAP point clouds
 python src/q3_lidar_slam_complete.py   # Q3 LiDAR SLAM + Q3b/c/d
 python src/factor_graph_optimization.py # Synthetic factor-graph demo
+python src/generate_orb_yaml_from_colmap.py --cameras data/q2_results/colmap_runs/Basement_1_sparse/cameras.txt --out data/q2_results/RealSense_D455_from_colmap.yaml
+# After producing Q2c and Q3e MP4s (see make_q2c_video.py / make_q3e_video.py):
+python src/merge_coursework_videos.py     # needs ffmpeg on PATH
 ```
 
 All scripts are idempotent — figures are regenerated in place.
@@ -123,3 +132,5 @@ coursework results were generated with GTSAM.
 - KITTI / TUM raw images and groundtruth — downloaded at evaluation time; only
   the ORB-SLAM2 trajectory dumps are included.
 - ORB-SLAM2 binary — not included (external install required).
+- ffmpeg — optional; required only for `merge_coursework_videos.py` and the
+  `q_merge_coursework_videos` step in `rerun_all.sh`.

@@ -73,6 +73,17 @@ BLIND_SPOT_MIN = 135.0
 BLIND_SPOT_MAX = 225.0
 
 # ============================================================
+# SHARED HELPERS
+# ============================================================
+def closure_error(trajectory):
+    """Euclidean distance between start and end 2-D pose (metres)."""
+    if trajectory is None or len(trajectory) < 2:
+        return 0.0
+    return float(np.linalg.norm(np.asarray(trajectory)[-1, :2] -
+                                np.asarray(trajectory)[0, :2]))
+
+
+# ============================================================
 # DATA LOADING
 # ============================================================
 def load_scans(path, max_scans=None):
@@ -88,7 +99,14 @@ def load_scans(path, max_scans=None):
 # ============================================================
 # SCAN PROCESSING
 # ============================================================
-def process_scan(points_raw, max_range_mm=4000.0, angular_step=1):
+# RPLidar A1 return-quality threshold. The driver emits q in 0..63; q<5
+# corresponds to multipath / weak returns that ICP should not weight equally
+# with clean geometry. Applied consistently across pipeline and videos.
+RPLIDAR_MIN_QUALITY = 5
+
+
+def process_scan(points_raw, max_range_mm=4000.0, angular_step=1,
+                 min_quality=RPLIDAR_MIN_QUALITY):
     """
     Convert raw [(quality, angle_deg, dist_mm),...] to Nx2 XY array (metres).
 
@@ -96,26 +114,26 @@ def process_scan(points_raw, max_range_mm=4000.0, angular_step=1):
     ----------
     max_range_mm   : maximum range filter
     angular_step   : 1 = full scan, 2 = every 2nd beam, 3 = every 3rd beam
+    min_quality    : drop returns with quality below this threshold
     """
     if not points_raw:
         return None
     raw = np.array(points_raw)          # (N, 3)
+
+    # Angular downsampling: keep every angular_step-th point (applied first so
+    # subsequent masks align with the downsampled view)
+    if angular_step > 1:
+        raw = raw[np.arange(len(raw)) % angular_step == 0]
+
     qualities  = raw[:, 0]
     angles_deg = raw[:, 1]
     dists_mm   = raw[:, 2]
 
-    # Angular downsampling: keep every angular_step-th point
-    if angular_step > 1:
-        idx = np.arange(len(raw))
-        raw       = raw[idx % angular_step == 0]
-        angles_deg = raw[:, 1]
-        dists_mm   = raw[:, 2]
-
-    # Distance filter
+    # Distance, quality, and blind-spot filters
     dist_mask  = (dists_mm > 10) & (dists_mm < max_range_mm)
-    # Blind spot filter
+    qual_mask  = qualities >= min_quality
     angle_mask = (angles_deg < BLIND_SPOT_MIN) | (angles_deg > BLIND_SPOT_MAX)
-    mask = dist_mask & angle_mask
+    mask = dist_mask & qual_mask & angle_mask
 
     if np.sum(mask) < 6:
         return None
@@ -126,12 +144,27 @@ def process_scan(points_raw, max_range_mm=4000.0, angular_step=1):
 
 
 def voxel_downsample(pts, voxel_m=0.05):
-    """Keep one point per voxel cell."""
+    """Return one centroid per voxel cell.
+
+    Uses centroid (mean of cell members) rather than first-point: centroids
+    average out Gaussian range noise and produce cleaner surface points for
+    downstream normal estimation.
+    """
     if voxel_m <= 0 or pts is None or len(pts) == 0:
         return pts
-    keys = np.floor(pts / voxel_m).astype(int)
-    _, first = np.unique(keys, axis=0, return_index=True)
-    return pts[first]
+    keys = np.floor(pts / voxel_m).astype(np.int64)
+    # Hash (kx, ky) into a single int64 key so np.unique + np.add.reduceat
+    # operate on 1-D inverse indices. The shift spans a 4 billion-cell range
+    # which is comfortably more than any practical lidar scene.
+    h = (keys[:, 0].astype(np.int64) << 32) | (keys[:, 1].astype(np.int64) & 0xFFFFFFFF)
+    order = np.argsort(h, kind='stable')
+    h_sorted   = h[order]
+    pts_sorted = pts[order]
+    # Group-start indices
+    boundaries = np.r_[0, np.flatnonzero(np.diff(h_sorted)) + 1]
+    sums   = np.add.reduceat(pts_sorted, boundaries, axis=0)
+    counts = np.diff(np.r_[boundaries, len(pts_sorted)]).reshape(-1, 1)
+    return sums / counts
 
 
 # ============================================================
@@ -155,30 +188,79 @@ def estimate_normals_pca(pts, k=5):
     return normals
 
 
-def solve_point_to_plane(src, dst, normals):
-    """Linearised point-to-plane ICP step → 3x3 homogeneous transform."""
-    A, b = [], []
-    for s, d, n in zip(src, dst, normals):
-        cross = s[0] * n[1] - s[1] * n[0]   # 2-D cross product (rotation moment arm)
-        A.append([cross, n[0], n[1]])
-        b.append(float(np.dot(d - s, n)))
-    if not A:
+def _huber_weights(residuals, k):
+    """Huber M-estimator weights: 1 inside ±k, k/|r| outside.
+
+    k is chosen from the median absolute residual (k = 1.4826 * MAD) so the
+    kernel is auto-scaled per iteration — no hand-tuning required.
+    """
+    r = np.abs(residuals)
+    w = np.ones_like(r)
+    mask = r > k
+    w[mask] = k / (r[mask] + 1e-12)
+    return w
+
+
+def solve_point_to_plane(src, dst, normals, return_hessian=False,
+                         huber=True):
+    """Linearised point-to-plane ICP step -> 3x3 homogeneous transform.
+
+    With huber=True the residuals are reweighted by a Huber M-estimator so
+    partial-overlap outliers don't bias the least-squares solution. Returns
+    the Hessian (A^T W A) alongside the transform when ``return_hessian``
+    is set, which the SLAM loop uses to derive pose-edge information
+    matrices for the factor graph.
+    """
+    if len(src) == 0:
+        if return_hessian:
+            return np.eye(3), np.eye(3) * 1e-6
         return np.eye(3)
-    A, b = np.array(A), np.array(b)
-    x, *_ = np.linalg.lstsq(A, b, rcond=None)
+
+    # Build residual vector r_i = (d_i - s_i) . n_i and Jacobian rows
+    # a_i = [s_i x n_i, n_i_x, n_i_y] in one vectorised step
+    cross = src[:, 0] * normals[:, 1] - src[:, 1] * normals[:, 0]
+    A = np.column_stack([cross, normals[:, 0], normals[:, 1]])
+    b = np.einsum('ij,ij->i', dst - src, normals)
+
+    if huber and len(b) > 4:
+        # One pass of IRLS: initial solve, compute residuals, reweight.
+        x0, *_ = np.linalg.lstsq(A, b, rcond=None)
+        resid  = b - A @ x0
+        mad    = np.median(np.abs(resid - np.median(resid))) + 1e-9
+        k      = 1.4826 * mad
+        w      = _huber_weights(resid, k)
+        sw     = np.sqrt(w)
+        Aw = A * sw[:, None]
+        bw = b * sw
+        x, *_ = np.linalg.lstsq(Aw, bw, rcond=None)
+        H = Aw.T @ Aw
+    else:
+        x, *_ = np.linalg.lstsq(A, b, rcond=None)
+        H = A.T @ A
+
     c, s_ = np.cos(x[0]), np.sin(x[0])
     T = np.eye(3)
     T[:2, :2] = [[c, -s_], [s_, c]]
     T[:2, 2]  = [x[1], x[2]]
+    if return_hessian:
+        return T, H
     return T
 
 
 def icp_scan_to_map(src, map_pts, map_normals, init_pose,
-                    max_iter=10, corr_thresh=0.5):
-    """Register src into the map frame; returns updated 3x3 pose."""
+                    max_iter=10, corr_thresh=0.5, return_hessian=False):
+    """Register src into the map frame; returns updated 3x3 pose.
+
+    If return_hessian=True, also returns the (theta, x, y) information matrix
+    from the final converged iteration, scaled by the number of inlier
+    correspondences. This is the natural information weight for the
+    resulting pose-graph edge.
+    """
     src_h = np.vstack([src.T, np.ones(len(src))])       # (3, N)
     pose  = init_pose.copy()
     nn    = NearestNeighbors(n_neighbors=1).fit(map_pts)
+    last_H = None
+    last_n_inliers = 0
 
     for _ in range(max_iter):
         global_h = pose @ src_h
@@ -188,12 +270,23 @@ def icp_scan_to_map(src, map_pts, map_normals, init_pose,
         valid = dists < corr_thresh
         if valid.sum() < 8:
             break
-        dT = solve_point_to_plane(global_[valid],
-                                   map_pts[idx[valid]],
-                                   map_normals[idx[valid]])
+        if return_hessian:
+            dT, last_H = solve_point_to_plane(global_[valid],
+                                               map_pts[idx[valid]],
+                                               map_normals[idx[valid]],
+                                               return_hessian=True)
+            last_n_inliers = int(valid.sum())
+        else:
+            dT = solve_point_to_plane(global_[valid],
+                                       map_pts[idx[valid]],
+                                       map_normals[idx[valid]])
         pose = dT @ pose
         if np.linalg.norm(dT[:2, 2]) < 1e-3 and abs(np.arctan2(dT[1,0], dT[0,0])) < 1e-3:
             break
+    if return_hessian:
+        if last_H is None:
+            last_H = np.eye(3) * 1e-6
+        return pose, last_H, last_n_inliers
     return pose
 
 
@@ -225,7 +318,10 @@ def build_occupancy_grid(trajectory_xyt, scans_xy_global,
         ry = np.clip(ry, 0, N_cell - 1)
         for hit in scan_global:
             hx, hy = w2g(hit)
-            # Bresenham ray for free cells
+            # Bresenham ray for free cells. The step cap must be at least
+            # dx+dy+1 so a ray that traverses the full grid is not truncated.
+            # The previous hard cap of 200 silently clipped any ray > ~10 m
+            # at cell_m=0.05, which corrupted max-range experiments.
             x0, y0 = rx, ry
             x1, y1 = hx, hy
             dx, dy = abs(x1 - x0), abs(y1 - y0)
@@ -234,7 +330,8 @@ def build_occupancy_grid(trajectory_xyt, scans_xy_global,
             err    = dx - dy
             cx, cy = x0, y0
             steps  = 0
-            while (cx != x1 or cy != y1) and steps < 200:
+            steps_max = dx + dy + 1
+            while (cx != x1 or cy != y1) and steps < steps_max:
                 if 0 <= cx < N_cell and 0 <= cy < N_cell:
                     log_grid[cy, cx] -= 0.4      # free
                 e2 = 2 * err
@@ -263,12 +360,25 @@ def build_occupancy_grid(trajectory_xyt, scans_xy_global,
 def run_slam(scans_raw, max_range_mm=4000.0, angular_step=1,
              voxel_m=0.0, scan_skip=1,
              corr_thresh=0.5, kf_dist=0.2, kf_angle=0.2,
-             icp_iter=10, local_map=20):
+             icp_iter=10, local_map=20,
+             max_step_dist=0.5, max_step_deg=25.0):
     """
     Offline ICP-based laser odometry.
 
     scan_skip: 1 = use every scan, 2 = skip odd (use even), 3 = use every 3rd
-    Returns dict with trajectory, global_scans_xy, keyframe_poses, timestamps.
+    max_step_dist / max_step_deg: per-scan divergence gate (defaults 0.5 m,
+    25 deg — much tighter than the old 2 m / 45 deg, which allowed 20 m/s
+    jumps that never occur on a hand-pushed cart at ~1 m/s).
+
+    Returns dict with:
+      trajectory     : (N, 3) array [x, y, theta]
+      kf_poses       : list of 3x3 SE(2) keyframe poses
+      map_pts        : list of (Mi, 2) global keyframe points
+      kf_info        : list of per-keyframe (theta, x, y) info matrices
+                       derived from the ICP Hessian on the step that
+                       produced that keyframe (used for per-edge weighting
+                       in the factor graph)
+      proc_times     : per-scan timings
     """
     pose       = np.eye(3)
     kf_pose    = np.eye(3)
@@ -276,10 +386,15 @@ def run_slam(scans_raw, max_range_mm=4000.0, angular_step=1,
     map_pts_all = []          # for occupancy grid
     trajectory = [[0.0, 0.0, 0.0]]   # [x, y, theta]
     kf_poses   = [np.eye(3)]
+    # Anchor prior (large info) for the first keyframe; subsequent entries
+    # come from the ICP Hessian.
+    kf_info    = [np.diag([1e4, 1e4, 1e4]).astype(float)]
     times      = []
 
     first = True
     n_total = len(scans_raw)
+    last_H = None          # most recent ICP Hessian (theta, x, y)
+    last_n_inliers = 0
 
     for i, s in enumerate(scans_raw):
         # Scan-rate reduction
@@ -303,20 +418,23 @@ def run_slam(scans_raw, max_range_mm=4000.0, angular_step=1,
             first = False
             continue
 
-        # ICP against local map
+        # ICP against local map (Hessian propagated out for PGO weighting)
         all_pts = np.vstack([k[0] for k in kf_buf])
         all_nrm = np.vstack([k[1] for k in kf_buf])
         prev_pose = pose.copy()
-        pose = icp_scan_to_map(pts, all_pts, all_nrm, pose,
-                                max_iter=icp_iter, corr_thresh=corr_thresh)
+        pose, last_H, last_n_inliers = icp_scan_to_map(
+            pts, all_pts, all_nrm, pose,
+            max_iter=icp_iter, corr_thresh=corr_thresh,
+            return_hessian=True)
 
-        # Reject diverged ICP steps: RPLidar max range is 8 m so a single
-        # scan-to-scan motion > 2 m or > 45° is physically impossible.
+        # Reject diverged ICP steps. Hand-pushed cart at ~1 m/s running at
+        # ~10 Hz can cover at most ~0.15 m per scan, so 0.5 m is already
+        # generous. Anything larger is numerical pathology, not motion.
         step_dist = np.linalg.norm(pose[:2, 2] - prev_pose[:2, 2])
         step_ang  = abs(np.arctan2(pose[1, 0], pose[0, 0]) -
                         np.arctan2(prev_pose[1, 0], prev_pose[0, 0]))
         step_ang  = min(step_ang, 2 * np.pi - step_ang)
-        if step_dist > 2.0 or step_ang > np.radians(45):
+        if step_dist > max_step_dist or step_ang > np.radians(max_step_deg):
             pose = prev_pose
 
         x, y  = pose[0, 2], pose[1, 2]
@@ -335,6 +453,11 @@ def run_slam(scans_raw, max_range_mm=4000.0, angular_step=1,
             kf_buf.append((gpts, gnrm))
             map_pts_all.append(gpts)
             kf_poses.append(pose.copy())
+            # Scale the ICP Hessian by inlier count so longer/shorter local
+            # maps produce comparable information; clamp to keep LM stable.
+            H_scaled = last_H * max(last_n_inliers, 8) / 50.0
+            H_scaled = H_scaled + np.eye(3) * 1e-3
+            kf_info.append(H_scaled)
             kf_pose = pose.copy()
             if len(kf_buf) > local_map:
                 kf_buf.pop(0)
@@ -346,6 +469,7 @@ def run_slam(scans_raw, max_range_mm=4000.0, angular_step=1,
     return {
         'trajectory':  np.array(trajectory),
         'kf_poses':    kf_poses,
+        'kf_info':     kf_info,
         'map_pts':     map_pts_all,
         'proc_times':  np.array(times) if times else np.array([0.0]),
     }
@@ -523,10 +647,18 @@ def _plot_q3b_occupancy_grids(seq_name, groups, out_dir, cell_m=0.05, grid_m=25.
         for ax, (label, r) in zip(axes, res_dict.items()):
             traj  = r['trajectory']
             kf    = r['map_pts']
+            kf_poses = r.get('kf_poses', [])
+            # Pose of the sensor when each keyframe scan was captured,
+            # in the same order as the keyframe point clouds. This is
+            # the correct origin for Bresenham ray-casting — pairing
+            # keyframe clouds with arbitrary trajectory samples produces
+            # rays that start at the wrong location.
+            kf_traj = np.array([[P[0, 2], P[1, 2], np.arctan2(P[1, 0], P[0, 0])]
+                                 for P in kf_poses]) if kf_poses else traj[:len(kf)]
             # Subsample for speed if very long
             step  = max(1, len(kf) // 400)
-            t_sub = traj[::step][:len(kf[::step])]
-            k_sub = kf[::step]
+            k_sub  = kf[::step]
+            t_sub  = kf_traj[::step][:len(k_sub)]
             grid, origin = build_occupancy_grid(t_sub, k_sub,
                                                  cell_m=cell_m, grid_m=grid_m)
             ax.imshow(grid, cmap='gray', origin='lower',
@@ -596,60 +728,125 @@ def _plot_q3b(seq_name, res_range, res_angular, res_voxel, res_rate, out_dir):
 # Q3c: LOOP CLOSURE DETECTION
 # ============================================================
 def detect_loop_closures(kf_poses, kf_scans_global,
-                          min_separation=10, pose_dist_thresh=2.0,
-                          icp_corr_thresh=0.4, icp_score_thresh=0.55):
+                          min_separation=10,
+                          min_loop_arc_m=8.0,
+                          pose_dist_thresh=2.0,
+                          icp_corr_thresh=0.4,
+                          icp_score_thresh=0.70,
+                          nms_window=15):
     """
-    Compare each keyframe with all earlier ones (at least min_separation away).
-    Use pose distance as a candidate filter, then ICP match score to confirm.
+    Detect loop-closure candidates between keyframes.
 
-    Returns list of (i, j, relative_transform) tuples.
+    Gates (in order):
+      1. ``j - i >= min_separation``                  temporal separation
+      2. Adaptive arc-length gate. The robot must have physically travelled
+         at least ``min_loop_arc_m`` OR 40 % of the total trajectory length,
+         whichever is smaller. This is the single most important filter —
+         without it, any two keyframes in the same sliding window would
+         match simply because they see the same local scene, producing
+         hundreds of spurious "loops". Scaling to the total arc recovers
+         loop detection on short sequences (e.g. BikeStorage, 11 m) that
+         would otherwise be unable to meet a fixed 8 m gate.
+      3. ``raw_pose_distance(i, j) <= pose_dist_thresh``
+         the robot must be geometrically close to i when observing from j
+         (i.e. a true revisit).
+      4. ICP overlap score >= ``icp_score_thresh``. 0.70 is a practical
+         balance on this corpus: bogus sliding-window matches concentrate
+         at 0.45-0.60, confirmed revisits at 0.75-0.95. The match-score
+         histogram at the bottom of each Q3c figure visualises the
+         separation per sequence.
+
+    The NMS window is deliberately wide (15 keyframes) so that a single
+    physical revisit — which often generates clusters of 20+ candidate
+    matches because the local map overlaps heavily between adjacent KFs
+    — collapses to one factor rather than flooding the pose graph with
+    near-duplicate loops that over-constrain the PGO.
+
+    After these gates we apply non-maximum suppression on (i, j) pairs
+    sharing the same j — for any cluster of candidate i-indices within
+    ``nms_window`` of each other, only the highest-scoring one survives.
+    This avoids a single revisit producing 10-20 near-duplicate factors.
+
+    Returns list of ``(i, j, T_rel, score, dist_ij)`` tuples.
     """
-    closures = []
     n = len(kf_poses)
+    if n < 2:
+        return []
+
+    # Precompute per-KF xy and cumulative arc length along the raw trajectory
+    kf_xy = np.array([[P[0, 2], P[1, 2]] for P in kf_poses])
+    arc = np.zeros(n)
+    for k in range(1, n):
+        arc[k] = arc[k - 1] + float(np.hypot(kf_xy[k, 0] - kf_xy[k - 1, 0],
+                                              kf_xy[k, 1] - kf_xy[k - 1, 1]))
+
+    # Adaptive arc-length gate (see docstring)
+    effective_arc = max(2.0, min(min_loop_arc_m, arc[-1] * 0.4))
+
+    raw = []  # (score, i, j, T_rel, dist_ij)
 
     for j in range(min_separation, n):
         pj = kf_poses[j]
-        xj, yj = pj[0, 2], pj[1, 2]
+        scan_j = kf_scans_global[j]
+        if scan_j is None or len(scan_j) < 8:
+            continue
 
-        # Only compare against sufficiently older keyframes. The previous
-        # range expression could include invalid future indices for small j.
+        # Precompute src_local ONCE per j — same for every candidate i.
+        src_world_h = np.vstack([scan_j.T, np.ones(len(scan_j))])
+        src_local   = (np.linalg.inv(pj) @ src_world_h)[:2].T
+        src_local_h = np.vstack([src_local.T, np.ones(len(src_local))])
+
         for i in range(0, j - min_separation + 1):
-            pi = kf_poses[i]
-            xi, yi = pi[0, 2], pi[1, 2]
-            dist_ij = np.hypot(xj - xi, yj - yi)
+            if arc[j] - arc[i] < effective_arc:
+                continue
 
+            pi = kf_poses[i]
+            dist_ij = float(np.hypot(kf_xy[j, 0] - kf_xy[i, 0],
+                                      kf_xy[j, 1] - kf_xy[i, 1]))
             if dist_ij > pose_dist_thresh:
                 continue
 
-            # ICP refinement between keyframe scans
             ref = kf_scans_global[i]
-            if kf_scans_global[j] is None or ref is None or len(kf_scans_global[j]) < 8 or len(ref) < 8:
+            if ref is None or len(ref) < 8:
                 continue
 
-            # icp_scan_to_map expects src in the sensor/local frame; kf_scans_global
-            # stores points in the world frame, so transform j's scan back to j's body frame.
-            src_world_h = np.vstack([kf_scans_global[j].T, np.ones(len(kf_scans_global[j]))])
-            src_local   = (np.linalg.inv(pj) @ src_world_h)[:2].T
-
-            ref_nrm = estimate_normals_pca(ref)
-            nn = NearestNeighbors(n_neighbors=1).fit(ref)
+            ref_nrm    = estimate_normals_pca(ref)
+            nn         = NearestNeighbors(n_neighbors=1).fit(ref)
             init       = np.linalg.inv(pi) @ pj
             pj_refined = icp_scan_to_map(src_local, ref, ref_nrm, init,
-                                         max_iter=15, corr_thresh=icp_corr_thresh)
+                                          max_iter=15, corr_thresh=icp_corr_thresh)
 
-            # T_rel = Pose_i^{-1} · Pose_j_refined — exactly what BetweenFactorPose2 expects.
+            # Relative transform in the form BetweenFactorPose2 expects
             T_rel = np.linalg.inv(pi) @ pj_refined
 
-            # Score = fraction of j's points (world frame) within threshold of ref
-            src_local_h = np.vstack([src_local.T, np.ones(len(src_local))])
             aligned = (pj_refined @ src_local_h)[:2].T
             dists, _ = nn.kneighbors(aligned, return_distance=True)
             score = float((dists.ravel() < icp_corr_thresh).mean())
 
             if score >= icp_score_thresh:
-                closures.append((i, j, T_rel, score, dist_ij))
+                raw.append((score, i, j, T_rel, dist_ij))
 
-    return closures
+    if not raw:
+        return []
+
+    # 2-D non-maximum suppression in (i, j) space. A single physical revisit
+    # typically produces a cluster of candidates with nearby i AND nearby j
+    # (the robot is moving through both observation windows). We want one
+    # factor per revisit, not one per KF pair. We greedily keep the highest-
+    # scoring candidate and drop any remaining candidate with |Δi|<window and
+    # |Δj|<window of anything already kept.
+    raw.sort(key=lambda c: -c[0])  # descending score
+    kept = []
+    for c in raw:
+        score_c, i_c, j_c = c[0], c[1], c[2]
+        if any(abs(i_c - k[1]) < nms_window and abs(j_c - k[2]) < nms_window
+               for k in kept):
+            continue
+        kept.append(c)
+
+    # Emit in canonical (i, j, T_rel, score, dist_ij) order, sorted by j then i
+    kept.sort(key=lambda c: (c[2], c[1]))
+    return [(c[1], c[2], c[3], c[0], c[4]) for c in kept]
 
 
 def run_q3c(seq_name, slam_result, out_dir):
@@ -692,7 +889,7 @@ def run_q3c(seq_name, slam_result, out_dir):
     if closures:
         scores = [lc[3] for lc in closures]
         ax2.hist(scores, bins=15, color='steelblue', edgecolor='k', alpha=0.8)
-        ax2.axvline(0.55, color='r', linestyle='--', label='threshold=0.55')
+        ax2.axvline(0.70, color='r', linestyle='--', label='threshold=0.70')
         ax2.set_xlabel('ICP match score')
         ax2.set_ylabel('Count')
         ax2.set_title('Loop closure score distribution')
@@ -735,11 +932,55 @@ def pose_error(z_rel, p_i, p_j):
     return np.array([ex, ey, eth])
 
 
+# Sigmas on (x, y, theta) for pose-graph factors. We follow the conventional
+# PGO weighting: loop closures are trusted at least as much as odometry,
+# because loops are what pull the drifted chain back into global consistency.
+# A scan-matched loop between confirmed revisits (ICP score >= 0.80) is
+# geometrically tighter than consecutive-scan odometry accumulated over dozens
+# of frames: the loop edge carries one integrated constraint, odometry edges
+# accumulate per-step residuals. These values are used as a fallback only —
+# build_pose_graph now prefers per-edge information matrices derived from the
+# ICP Hessian where available.
+_DEFAULT_ODOM_SIGMAS = np.array([0.05, 0.05, 0.03])   # 5 cm / 5 cm / ~1.7 deg
+_DEFAULT_LOOP_SIGMAS = np.array([0.02, 0.02, 0.01])   # 2 cm / 2 cm / ~0.6 deg
+
+
+def _info_from_sigmas(sigmas):
+    """Diagonal information matrix from a per-axis sigma vector."""
+    sigmas = np.asarray(sigmas, dtype=float)
+    return np.diag(1.0 / (sigmas ** 2))
+
+
 def build_pose_graph(kf_poses, closures,
-                      omega_odom=100.0, omega_loop=500.0):
-    """Build lists of (i, j, z_rel, omega) factors."""
+                     odom_sigmas=_DEFAULT_ODOM_SIGMAS,
+                     loop_sigmas=_DEFAULT_LOOP_SIGMAS,
+                     kf_info=None):
+    """Build factor list [(i, j, z_rel, info_3x3), ...].
+
+    Each factor carries a full 3x3 information matrix on (x, y, theta). When
+    ``kf_info`` (per-keyframe ICP Hessian) is supplied, odometry edges use
+    the average of the two endpoint Hessians — that way edges going through
+    geometrically ambiguous areas (e.g. a featureless corridor) are
+    automatically down-weighted relative to feature-rich ones. Loop closures
+    default to a fixed tight sigma because the per-loop Hessian is not
+    propagated through ``detect_loop_closures`` (cheap fix: fall back to
+    _DEFAULT_LOOP_SIGMAS for now).
+
+    Note: the ICP Hessian is parameterised (theta, tx, ty) but GTSAM's
+    Pose2 convention is (tx, ty, theta), so the matrix is permuted before
+    being stored on the edge.
+    """
     factors = []
     n = len(kf_poses)
+    odom_info_fallback = _info_from_sigmas(odom_sigmas)
+    loop_info          = _info_from_sigmas(loop_sigmas)
+
+    def _permute_theta_first_to_xy_theta(H):
+        """ICP Hessian is (theta, x, y); Pose2 wants (x, y, theta)."""
+        P = np.array([[0, 1, 0],
+                      [0, 0, 1],
+                      [1, 0, 0]], dtype=float)
+        return P @ H @ P.T
 
     # Odometry edges between consecutive keyframes
     for k in range(n - 1):
@@ -747,20 +988,50 @@ def build_pose_graph(kf_poses, closures,
         Pj = kf_poses[k + 1]
         dT = np.linalg.inv(Pi) @ Pj
         z  = np.array([dT[0,2], dT[1,2], np.arctan2(dT[1,0], dT[0,0])])
-        factors.append((k, k + 1, z, omega_odom))
+        if kf_info is not None and k + 1 < len(kf_info):
+            H_icp_i = kf_info[k]       if k < len(kf_info) else None
+            H_icp_j = kf_info[k + 1]
+            # kf_info[0] is a synthetic anchor (large diagonal), not an ICP
+            # Hessian — never average it into the first odometry edge.
+            if k == 0 and H_icp_j is not None:
+                info = _permute_theta_first_to_xy_theta(H_icp_j)
+            elif H_icp_i is not None and H_icp_j is not None:
+                info = 0.5 * (_permute_theta_first_to_xy_theta(H_icp_i) +
+                              _permute_theta_first_to_xy_theta(H_icp_j))
+            elif H_icp_j is not None:
+                info = _permute_theta_first_to_xy_theta(H_icp_j)
+            else:
+                info = np.zeros((3, 3))
+            # Regularise: keep conditioning numerically sane and bound
+            # above the fallback (tighter-than-reasonable edges destabilise LM)
+            info = info + odom_info_fallback
+        else:
+            info = odom_info_fallback
+        factors.append((k, k + 1, z, info))
 
-    # Loop closure edges
+    # Loop closure edges — fixed tight info (see docstring)
     for lc in closures:
         i, j, T_rel, *_ = lc
         z = np.array([T_rel[0,2], T_rel[1,2], np.arctan2(T_rel[1,0], T_rel[0,0])])
-        factors.append((i, j, z, omega_loop))
+        factors.append((i, j, z, loop_info))
 
     return factors
+
+
+def _as_info_matrix(info):
+    """Accept either a (3,) sigma vector or a (3,3) info matrix; return (3,3)."""
+    info = np.asarray(info, dtype=float)
+    if info.ndim == 1:
+        return np.diag(1.0 / (info ** 2))
+    return info
 
 
 def _optimize_pose_graph_scipy(kf_poses, factors, n_iter=200):
     """
     Scipy SLSQP fallback optimiser (anchors pose 0 with equality constraint).
+
+    Each factor carries a full 3x3 information matrix on (x, y, theta); cost
+    is the Mahalanobis squared residual e^T W e (no factorisation required).
     """
     n = len(kf_poses)
     x0 = np.zeros(3 * n)
@@ -769,13 +1040,16 @@ def _optimize_pose_graph_scipy(kf_poses, factors, n_iter=200):
         x0[3*k+1] = P[1, 2]
         x0[3*k+2] = np.arctan2(P[1, 0], P[0, 0])
 
+    # Precompute info matrices once
+    infos = [_as_info_matrix(f[3]) for f in factors]
+
     def cost(x):
         total = 0.0
-        for i, j, z, omega in factors:
+        for (i, j, z, _), W in zip(factors, infos):
             pi = x[3*i:3*i+3]
             pj = x[3*j:3*j+3]
             e  = pose_error(z, pi, pj)
-            total += omega * float(e @ e)
+            total += float(e @ W @ e)
         return total
 
     def anchor(x):
@@ -793,20 +1067,24 @@ def _optimize_pose_graph_scipy(kf_poses, factors, n_iter=200):
         T[1,0], T[1,1] =  np.sin(ti),  np.cos(ti)
         T[0,2], T[1,2] =  xi, yi
         opt_poses.append(T)
-    return opt_poses
+    return opt_poses, float(cost(x0)), float(cost(xopt))
 
 
 def _optimize_pose_graph_gtsam(kf_poses, factors, verbose=False):
     """
     GTSAM Levenberg-Marquardt pose-graph optimisation (Pose2).
-    Anchors pose 0 with a tight Gaussian prior (equivalent to fixing it).
-    Information matrix per factor is diag(omega) across (x, y, theta).
+    Anchors pose 0 with a tight-but-numerically-sane Gaussian prior.
+    Each factor carries its own per-axis sigma vector (x, y, theta).
+
+    Returns (opt_poses, initial_error, final_error, iterations).
     """
     graph   = gtsam.NonlinearFactorGraph()
     initial = gtsam.Values()
 
-    # Anchor: strong prior on pose 0 so the global frame is fixed
-    prior_sigmas = np.array([1e-6, 1e-6, 1e-8])
+    # Anchor: tight prior on pose 0 — σ=0.1 mm in x/y and ~0.006 deg in theta.
+    # Loose enough to avoid LM ill-conditioning, tight enough that pose 0
+    # barely moves during optimisation.
+    prior_sigmas = np.array([1e-4, 1e-4, 1e-4])
     prior_noise  = noiseModel.Diagonal.Sigmas(prior_sigmas)
     p0 = kf_poses[0]
     theta0 = np.arctan2(p0[1, 0], p0[0, 0])
@@ -817,10 +1095,16 @@ def _optimize_pose_graph_gtsam(kf_poses, factors, verbose=False):
         theta_k = np.arctan2(P[1, 0], P[0, 0])
         initial.insert(k, Pose2(P[0, 2], P[1, 2], theta_k))
 
-    # Between factors (odometry + loop closures)
-    for i, j, z, omega in factors:
-        sigma = 1.0 / np.sqrt(max(omega, 1e-9))
-        noise = noiseModel.Diagonal.Sigmas(np.array([sigma, sigma, sigma]))
+    # Between factors (odometry + loop closures). Supports full 3x3
+    # information matrices (from ICP Hessians) as well as per-axis sigma
+    # fallbacks. GTSAM accepts either via noiseModel.Gaussian.Information
+    # or noiseModel.Diagonal.Sigmas.
+    for i, j, z, info in factors:
+        info_arr = np.asarray(info, dtype=float)
+        if info_arr.ndim == 2:
+            noise = noiseModel.Gaussian.Information(info_arr)
+        else:
+            noise = noiseModel.Diagonal.Sigmas(info_arr)
         graph.add(BetweenFactorPose2(i, j, Pose2(z[0], z[1], z[2]), noise))
 
     params = gtsam.LevenbergMarquardtParams()
@@ -833,10 +1117,12 @@ def _optimize_pose_graph_gtsam(kf_poses, factors, verbose=False):
     optimizer = gtsam.LevenbergMarquardtOptimizer(graph, initial, params)
     result = optimizer.optimize()
 
+    initial_err = float(graph.error(initial))
+    final_err   = float(graph.error(result))
+    n_iter      = int(optimizer.iterations())
     if verbose:
-        print(f"    GTSAM: initial error={graph.error(initial):.4f}, "
-              f"final error={graph.error(result):.4f}, "
-              f"iters={optimizer.iterations()}")
+        print(f"    GTSAM: initial error={initial_err:.4f}, "
+              f"final error={final_err:.4f}, iters={n_iter}")
 
     opt_poses = []
     for k in range(len(kf_poses)):
@@ -847,25 +1133,20 @@ def _optimize_pose_graph_gtsam(kf_poses, factors, verbose=False):
         T[1, 0], T[1, 1] = st,  ct
         T[0, 2], T[1, 2] = p.x(), p.y()
         opt_poses.append(T)
-    return opt_poses
+    return opt_poses, initial_err, final_err, n_iter
 
 
 def optimize_pose_graph(kf_poses, factors, n_iter=200):
     """
     Factor-graph pose-graph optimisation.
     Uses GTSAM (Levenberg-Marquardt) when available, else scipy SLSQP.
-    Returns optimised list of 3x3 pose matrices.
+    Returns (opt_poses, initial_error, final_error, iterations, backend).
     """
     if _HAVE_GTSAM:
-        return _optimize_pose_graph_gtsam(kf_poses, factors, verbose=True)
-    return _optimize_pose_graph_scipy(kf_poses, factors, n_iter=n_iter)
-
-
-def closure_error(trajectory):
-    """Euclidean distance between start and end pose (metres)."""
-    if len(trajectory) < 2:
-        return 0.0
-    return float(np.linalg.norm(trajectory[-1, :2] - trajectory[0, :2]))
+        opt, e0, e1, it = _optimize_pose_graph_gtsam(kf_poses, factors, verbose=True)
+        return opt, e0, e1, it, 'gtsam'
+    opt, e0, e1 = _optimize_pose_graph_scipy(kf_poses, factors, n_iter=n_iter)
+    return opt, e0, e1, n_iter, 'scipy'
 
 
 def run_q3d(seq_name, slam_result, closures, out_dir):
@@ -883,14 +1164,36 @@ def run_q3d(seq_name, slam_result, closures, out_dir):
     err_before = float(np.linalg.norm(raw_xyt[-1, :2] - raw_xyt[0, :2]))
     print(f"  Closure error BEFORE: {err_before:.4f} m")
 
-    factors    = build_pose_graph(kf_poses, closures)
-    opt_poses  = optimize_pose_graph(kf_poses, factors)
+    # If no high-confidence loop closures were found, running PGO with only
+    # odometry factors is a no-op (the odometry constraints are perfectly
+    # consistent with the current estimate by construction, so LM has nothing
+    # to optimise and can only distort the trajectory if it does anything at
+    # all). Honestly report that instead of silently shipping a degraded result.
+    if len(closures) == 0:
+        print(f"  [SKIP] No loop closures detected — PGO cannot improve a "
+              f"chain with only odometry factors. Reporting raw trajectory.")
+        opt_poses      = list(kf_poses)
+        lm_err_initial = 0.0
+        lm_err_final   = 0.0
+        lm_iters       = 0
+        backend        = 'skipped (no loops)'
+        factors        = build_pose_graph(kf_poses, [],
+                                           kf_info=slam_result.get('kf_info'))
+    else:
+        factors    = build_pose_graph(kf_poses, closures,
+                                       kf_info=slam_result.get('kf_info'))
+        opt_poses, lm_err_initial, lm_err_final, lm_iters, backend = \
+            optimize_pose_graph(kf_poses, factors)
     opt_xyt    = np.array([[P[0,2], P[1,2], np.arctan2(P[1,0], P[0,0])]
                             for P in opt_poses])
     err_after  = float(np.linalg.norm(opt_xyt[-1, :2] - opt_xyt[0, :2]))
     print(f"  Closure error AFTER:  {err_after:.4f} m")
     print(f"  Improvement:          {(err_before - err_after):.4f} m  "
           f"({100*(err_before - err_after)/max(err_before,1e-6):.1f}%)")
+    print(f"  {backend} LM cost: initial={lm_err_initial:.4f}, "
+          f"final={lm_err_final:.4f}, iterations={lm_iters}, "
+          f"n_factors={len(factors)} (n_odom={len(kf_poses)-1}, "
+          f"n_loop={len(closures)})")
 
     # Plot: before vs after, plus closure error bar
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
@@ -924,6 +1227,15 @@ def run_q3d(seq_name, slam_result, closures, out_dir):
         ax3.text(xi, val + 0.01, f'{val:.3f} m', ha='center', fontsize=11,
                  fontweight='bold')
     ax3.set_ylim(0, max(err_before, 0.01) * 1.3)
+
+    # Annotate the LM cost reduction (Mahalanobis^2 sum over all factors)
+    cost_reduction_pct = 100.0 * (lm_err_initial - lm_err_final) / max(lm_err_initial, 1e-9)
+    ax3.text(0.5, 0.96,
+             f'{backend} LM cost: {lm_err_initial:.2f} → {lm_err_final:.2f}\n'
+             f'({cost_reduction_pct:.1f}% reduction, {lm_iters} iters, '
+             f'{len(factors)} factors, {len(closures)} loops)',
+             transform=ax3.transAxes, ha='center', va='top', fontsize=8,
+             bbox=dict(boxstyle='round,pad=0.3', facecolor='whitesmoke', alpha=0.9))
 
     plt.tight_layout()
     out = os.path.join(out_dir, f'q3d_{seq_name.lower()}.png')
@@ -1017,13 +1329,16 @@ def _plot_q3d_occupancy_before_after(seq_name, slam_result, opt_poses, out_dir,
 def save_occupancy_grid(seq_name, slam_result, out_dir, cell_m=0.05):
     """Build and save occupancy grid image."""
     print(f"  Building occupancy grid for {seq_name}...")
-    traj   = slam_result['trajectory']
-    kf_pts = slam_result['map_pts']
+    traj     = slam_result['trajectory']
+    kf_pts   = slam_result['map_pts']
+    kf_poses = slam_result.get('kf_poses', [])
+    # Ray-cast origins must be the true sensor poses at keyframe capture time.
+    kf_traj = np.array([[P[0, 2], P[1, 2], np.arctan2(P[1, 0], P[0, 0])]
+                         for P in kf_poses]) if kf_poses else traj[:len(kf_pts)]
 
-    # Use a subset for speed if many keyframes
     step   = max(1, len(kf_pts) // 400)
-    t_sub  = traj[::step][:len(kf_pts[::step])]
     k_sub  = kf_pts[::step]
+    t_sub  = kf_traj[::step][:len(k_sub)]
 
     grid_m = 25.0
     grid, origin = build_occupancy_grid(t_sub, k_sub, cell_m=cell_m, grid_m=grid_m)

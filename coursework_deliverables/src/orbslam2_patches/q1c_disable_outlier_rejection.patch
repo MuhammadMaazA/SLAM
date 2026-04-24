@@ -1,0 +1,40 @@
+From: COMP0222 CW2 Group 32
+Subject: [PATCH] Q1c: disable chi-squared outlier gating in PoseOptimization
+
+Applies to: raulmur/ORB_SLAM2 (master)
+
+---
+ src/Optimizer.cc | 15 +++++++++------
+ 1 file changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/src/Optimizer.cc b/src/Optimizer.cc
+--- a/src/Optimizer.cc
++++ b/src/Optimizer.cc
+@@ -260,6 +260,9 @@ int Optimizer::PoseOptimization(Frame *pFrame)
+     // Set MapPoint vertices
+     const int N = pFrame->N;
+ 
++    // COMP0222 Q1c: true = disable chi-squared outlier gating between LM rounds.
++    const bool kDisableOutlierRejection = true;
++
+     vector<g2o::EdgeSE3ProjectXYZOnlyPose*> vpEdgesMono;
+     vector<size_t> vnIndexEdgeMono;
+     vpEdgesMono.reserve(N);
+@@ -392,7 +395,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
+ 
+             const float chi2 = e->chi2();
+ 
+-            if(chi2>chi2Mono[it])
++            if(!kDisableOutlierRejection && chi2>chi2Mono[it])
+             {                
+                 pFrame->mvbOutlier[idx]=true;
+                 e->setLevel(1);
+@@ -421,7 +424,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
+ 
+             const float chi2 = e->chi2();
+ 
+-            if(chi2>chi2Stereo[it])
++            if(!kDisableOutlierRejection && chi2>chi2Stereo[it])
+             {
+                 pFrame->mvbOutlier[idx]=true;
+                 e->setLevel(1);

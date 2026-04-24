@@ -220,7 +220,7 @@ title_bar(sl, 'Q3 — LiDAR SLAM with Own Sequences',
           'Data Collection  ·  ICP Odometry  ·  Loop Closure  ·  Factor Graph')
 
 card(sl, 0.2, 1.35, 4.1, 2.75, 'Data Collection', [
-    'RPLidar A1M8 (max range 8000 mm)',
+    'RPLidar A1M8 (max range 12000 mm)',
     '2 indoor + 1 outdoor sequences',
     'Basement_1  —  indoor',
     'Floor7_Hallway  —  large (Marshgate)',
@@ -229,25 +229,27 @@ card(sl, 0.2, 1.35, 4.1, 2.75, 'Data Collection', [
 ], title_color=ACCENT)
 
 card(sl, 4.6, 1.35, 4.1, 2.75, 'Laser Odometry', [
-    'Point-to-plane ICP (linearised)',
+    'Huber-robust point-to-plane ICP',
     'Log-odds occupancy grid',
-    'Bresenham ray-casting',
+    'Bresenham ray-casting (unbounded)',
     'Keyframe-based local map (20 KF)',
     'ICP divergence rejection',
-    '  (>2 m or >45° rejected)',
+    '  (>0.5 m or >25° rejected)',
 ], title_color=GREEN)
 
 card(sl, 9.0, 1.35, 4.1, 2.75, 'Loop Closure + Factor Graph', [
-    'Two-stage filter:',
-    '  1. Pose distance < 2.0 m',
-    '  2. ICP match score ≥ 0.55',
+    'Multi-stage gating:',
+    '  1. Temporal separation ≥ 10 KF',
+    '  2. Adaptive arc-length gate',
+    '  3. Pose distance < 2.0 m',
+    '  4. ICP match score ≥ 0.70',
     'GTSAM Levenberg-Marquardt',
-    'Odometry edges (ω=100)',
-    'Loop closure edges (ω=500)',
+    'Per-edge 3×3 info (ICP Hessian)',
+    'Loop info tighter than odometry',
 ], title_color=ORANGE)
 
 card(sl, 0.2, 4.3, 12.9, 2.8, 'Parameter Ablations (Q3b)', [
-    '① Max range: 2000 mm vs 8000 mm (sensor max)   ② Angular resolution: full / every 2nd / every 3rd beam',
+    '① Max range: 2000 mm vs 12000 mm (sensor max)   ② Angular resolution: full / every 2nd / every 3rd beam',
     '③ Voxel grid: None / 0.05 m / 0.10 m / 0.20 m   ④ Scan rate: all scans / 50% / 33%',
     'Each variation tested on all 3 sequences. Occupancy grids and closure error reported for each setting.',
 ], title_color=ACCENT, bullet_size=11)
@@ -259,7 +261,7 @@ title_bar(sl, 'Q3b — Parameter Analysis', 'Basement_1 (indoor) — closure err
 add_image(sl, os.path.join(Q3, 'q3b_basement_1.png'), 0.2, 1.3, 8.5, 5.8)
 card(sl, 9.0, 1.3, 4.1, 5.8, 'Key Findings', [
     'Range 2000mm: misses far walls',
-    'Range 8000mm: complete map',
+    'Range 12000mm: complete map',
     '',
     'Every 3rd beam: ICP diverges',
     'Full scan: best normal estimates',
@@ -279,7 +281,7 @@ card(sl, 9.0, 1.3, 4.1, 5.8, 'Key Findings', [
 sl = blank_slide(prs)
 title_bar(sl, 'Q3b — Occupancy Grid Maps per Parameter (Basement_1)')
 grids = [
-    ('q3b_grids_basement_1_max_range.png',        'Max Range (2000 vs 8000 mm)'),
+    ('q3b_grids_basement_1_max_range.png',        'Max Range (2000 vs 12000 mm)'),
     ('q3b_grids_basement_1_angular_resolution.png','Angular Resolution (full / n=2 / n=3)'),
     ('q3b_grids_basement_1_voxel_downsampling.png','Voxel Grid (None / 0.05 / 0.10 / 0.20 m)'),
     ('q3b_grids_basement_1_scan_rate.png',        'Scan Rate (all / 50% / 33%)'),
@@ -312,9 +314,9 @@ add_text(sl, 'Trajectory: before / after optimisation', 0.2, 4.5, 6.3, 0.3,
 add_text(sl, 'Occupancy grid: before / after optimisation', 6.7, 4.5, 6.3, 0.3,
          size=10, color=MUTED, align=PP_ALIGN.CENTER)
 card(sl, 0.2, 4.9, 12.9, 2.2, 'Factor Graph Details', [
-    '• Odometry edges between consecutive keyframes (information weight ω=100)',
-    '• Loop closure edges from confirmed detections (ω=500, higher trust)',
-    '• Anchor prior on pose 0 fixes global frame.  Closure error = Euclidean distance from start to end pose.',
+    '• Odometry edges: per-edge 3×3 information from scan-matched ICP Hessian + diagonal regulariser',
+    '• Loop edges: higher information than odometry (tighter σ on x, y, θ)',
+    '• Anchor prior on pose 0 fixes gauge. Closure error = Euclidean distance start → end pose.',
 ], title_color=ACCENT, bullet_size=11)
 
 

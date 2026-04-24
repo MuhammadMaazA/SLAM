@@ -80,6 +80,9 @@ def closure_error(traj):
 CLOSED_LOOP_SEQS = {'Basement_1', 'Basement_2', 'BikeStorage', 'BikeStorage2',
                     'Floor7_Hallway', 'Washroom'}
 
+# Coursework Q2: ≥500 poses after ORB-SLAM initialisation for submitted sequences.
+MIN_BRIEF_POSES = 500
+
 
 def load_colmap(seq_name):
     path = os.path.join(COLMAP_DIR, f"{seq_name}_colmap_poses.txt")
@@ -304,14 +307,21 @@ def plot_q2c(trajs):
     is_closed     = [n in CLOSED_LOOP_SEQS                 for n in names]
 
     fig, axes = plt.subplots(2, 3, figsize=(22, 12))
-    fig.suptitle("Q2c – ORB-SLAM2 Statistics Across All 9 Collected Sequences",
-                 fontsize=14, fontweight='bold')
+    fig.suptitle(
+        "Q2c – ORB-SLAM2 Statistics Across All 9 Collected Sequences\n"
+        f"(brief asks ≥{MIN_BRIEF_POSES} poses after init — hatched bars fall short)",
+        fontsize=13, fontweight='bold')
 
     x = np.arange(n_seqs)
     short_names = [n.replace("_", "\n") for n in names]
 
-    def _bar(ax, vals, ylabel, title, fmt, pad):
+    def _bar(ax, vals, ylabel, title, fmt, pad, hatch_short=False):
         bars = ax.bar(x, vals, color=colors, alpha=0.85)
+        if hatch_short:
+            for bar, n in zip(bars, pose_counts):
+                if n < MIN_BRIEF_POSES:
+                    bar.set_hatch('//')
+                    bar.set_edgecolor('0.35')
         ax.set_xticks(x); ax.set_xticklabels(short_names, fontsize=8)
         ax.set_ylabel(ylabel); ax.set_title(title)
         for bar, val in zip(bars, vals):
@@ -325,7 +335,7 @@ def plot_q2c(trajs):
     _bar(axes[0, 0], path_lengths, "Path Length (m)",
          "ORB-SLAM2 Tracked Path Length", "{:.1f}m", 0.05)
     _bar(axes[0, 1], pose_counts, "Number of Poses",
-         "ORB-SLAM2 Tracked Poses", "{:.0f}", 5)
+         "ORB-SLAM2 Tracked Poses", "{:.0f}", 5, hatch_short=True)
     _bar(axes[0, 2], durations, "Sequence Duration (s)",
          "Sequence Duration Tracked by ORB-SLAM2", "{:.0f}s", 0.5)
     _bar(axes[1, 0], avg_speeds, "Average Speed (m/s)",

@@ -1,9 +1,27 @@
 #!/usr/bin/env python3
 """
 Q2b: EVO-based comparison of COLMAP vs ORB-SLAM2 trajectories.
-Uses real keyframe timestamps from the recorded RGB streams so COLMAP poses are
-compared against the corresponding ORB-SLAM2 poses, rather than against a
-synthetically resampled trajectory.
+
+Uses real keyframe timestamps from the recorded RGB streams so COLMAP poses
+are compared against the corresponding ORB-SLAM2 poses (rather than against
+a synthetically resampled trajectory).
+
+Important note on the reported numbers
+--------------------------------------
+No external ground-truth trajectory exists for the custom RealSense D455
+sequences, so the "ATE" reported here is NOT accuracy against a reference.
+It is an **inter-method agreement** metric: the RMSE between COLMAP
+(treated as the reference after Umeyama alignment with scale correction)
+and ORB-SLAM2 over the timestamp-matched keyframes. Identical numbers
+would be produced by swapping which method plays the reference role,
+modulo the sign of the Sim(3) correction. Treat the value as "how much
+do two independent monocular estimates disagree" rather than "how far
+is ORB-SLAM2 from ground truth".
+
+The metric is still meaningful: if both methods converge to the same
+trajectory modulo scale, both are self-consistent and the scene is
+well-conditioned; large disagreement flags a sequence where one or both
+methods struggled (low texture, dynamic objects, motion blur).
 """
 
 import os
@@ -15,6 +33,7 @@ import matplotlib.gridspec as gridspec
 
 from evo.core import trajectory as evo_traj, metrics, sync
 from evo.core.metrics import PoseRelation
+from evo.core.sync import SyncException
 
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 _ROOT       = os.path.abspath(os.path.join(_HERE, '..'))
@@ -41,6 +60,10 @@ SEQ_COLORS = {'outdoor': '#ff6d00', 'indoor': '#00e5ff'}
 # Sequences with fewer ORB-SLAM2 poses than this are flagged as tracking failures
 # per the brief's 500-frame threshold.
 MIN_ORB_POSES = 500
+# Brief requires ≥500 poses after init for *submitted* sequences. Exclude
+# tracking failures from the Q2b figure by default so aggregate stats are not
+# polluted (e.g. BikeStorage2). Set Q2B_INCLUDE_SHORT_ORB=1 to keep them.
+INCLUDE_SHORT_ORB = os.environ.get('Q2B_INCLUDE_SHORT_ORB', '0') == '1'
 SEQUENCE_CAMERA_DIRS = {
     "Basement_1":     os.path.join(REC1, "Basement_1", "camera"),
     "Basement_2":     os.path.join(REC1, "Basement_2", "camera"),
@@ -168,19 +191,38 @@ def _match_colmap_timestamps(seq_name, colmap_names, colmap_se3):
 
 
 def _associate_and_align(seq_name, orb_ts, orb_se3, colmap_names, colmap_se3):
-    """Associate trajectories by real timestamps and align with scale correction."""
+    """Associate trajectories by real timestamps and align with scale correction.
+
+    On RealSense recordings we see two different failure modes:
+      - COLMAP chose a different keyframe subset than ORB-SLAM2 kept, so
+        there is no 30 ms overlap at all (raises SyncException). We relax
+        the threshold to 250 ms which matches the COLMAP stride on low-fps
+        outdoor sequences and retry once before giving up.
+      - Fewer than 5 associated poses survive Umeyama alignment.
+    """
     matched = _match_colmap_timestamps(seq_name, colmap_names, colmap_se3)
     if matched[0] is None:
         return None, None
     ref_ts, ref_se3 = matched
     traj_est = build_evo_traj(orb_se3, orb_ts)
     traj_ref = build_evo_traj(ref_se3, ref_ts)
-    traj_ref_s, traj_est_s = sync.associate_trajectories(traj_ref, traj_est,
-                                                         max_diff=0.03)
-    if len(traj_ref_s.timestamps) < 5:
-        return None, None
-    traj_est_s.align(traj_ref_s, correct_scale=True)
-    return traj_ref_s, traj_est_s
+
+    def _try_associate(max_diff):
+        try:
+            return sync.associate_trajectories(traj_ref, traj_est,
+                                               max_diff=max_diff)
+        except SyncException:
+            return None, None
+
+    for max_diff in (0.03, 0.25):
+        r, e = _try_associate(max_diff)
+        if r is None:
+            continue
+        if len(r.timestamps) < 5:
+            continue
+        e.align(r, correct_scale=True)
+        return r, e
+    return None, None
 
 
 def compute_ate_evo(seq_name, orb_ts, orb_se3, colmap_names, colmap_se3):
@@ -207,8 +249,12 @@ def compute_ate_evo(seq_name, orb_ts, orb_se3, colmap_names, colmap_se3):
                          'mean':   float(s['mean']),
                          'max':    float(s['max'])}
         return out, ref_s, est_s
-    except Exception as e:
-        print(f"    [EVO] {e}")
+    except (ValueError, RuntimeError, KeyError, SyncException) as e:
+        # Expected failures: too few timestamp-matched poses (<5), degenerate
+        # Umeyama alignment, no overlap between COLMAP keyframe subset and
+        # ORB-SLAM2 tracking window. Unexpected errors (IndexError,
+        # AttributeError) propagate so real bugs are not masked.
+        print(f"    [EVO] alignment/metric failed ({type(e).__name__}): {e}")
         return None, None, None
 
 
@@ -232,6 +278,10 @@ def main():
         orb_ts, orb_xyz, orb_se3             = load_tum(orbslam_path)
         if len(colmap_xyz) < 5 or len(orb_xyz) < 5:
             print(f"  SKIP {seq} (too few poses)")
+            continue
+        if not INCLUDE_SHORT_ORB and len(orb_xyz) < MIN_ORB_POSES:
+            print(f"  SKIP {seq} (ORB {len(orb_xyz)} poses < brief {MIN_ORB_POSES}; "
+                  f"set Q2B_INCLUDE_SHORT_ORB=1 to include)")
             continue
         ate, ref_aligned, est_aligned = compute_ate_evo(seq, orb_ts, orb_se3, colmap_names, colmap_se3)
         ate_t   = ate['trans']['rmse'] if ate else float('nan')
@@ -268,14 +318,20 @@ def main():
     gs  = gridspec.GridSpec(n_rows + 1, n_cols, figure=fig,
                             height_ratios=[0.35] + [1] * n_rows, hspace=0.45, wspace=0.35)
 
-    fig.suptitle('Q2b: COLMAP vs ORB-SLAM2 Trajectory Comparison (EVO ATE)',
-                 fontsize=13, fontweight='bold')
+    # Subtitle explicitly calls out that the "ATE" is inter-method
+    # agreement — no external ground truth exists for these sequences.
+    fig.suptitle('Q2b: COLMAP vs ORB-SLAM2 — inter-method agreement\n'
+                 '(no external ground truth; COLMAP treated as reference '
+                 'after Umeyama+scale alignment)',
+                 fontsize=12, fontweight='bold')
 
     # Summary table row
     ax_table = fig.add_subplot(gs[0, :])
     ax_table.axis('off')
     headers = ['Sequence', 'Env', 'COLMAP', 'ORB-SLAM2', 'Matched',
-               'ATE trans (m)', 'ATE rot (deg)', 'ATE full (SE3)']
+               'Disagreement\ntrans (m)',
+               'Disagreement\nrot (deg)',
+               'Disagreement\nfull (SE3)']
     rows    = []
     for seq, r in results.items():
         def _fmt(v, prec=4):
@@ -308,10 +364,10 @@ def main():
         plot_trajectory_2d(ax, r['orb_aligned_xyz'],    color_env, 'ORB-SLAM2 (matched+aligned)', lw=1.5)
 
         if not np.isnan(r['ate_rmse']):
-            ate_str = (f"ATE: trans={r['ate_rmse']:.3f}m  "
+            ate_str = (f"Disagreement: trans={r['ate_rmse']:.3f}m  "
                        f"rot={r['ate_rot_deg']:.1f}°")
         else:
-            ate_str = "ATE: N/A"
+            ate_str = "Disagreement: N/A"
         title_suffix = f"\n{ate_str}  |  matched={r['n_assoc']}"
         if r.get('tracking_failed'):
             ax.set_title(f"{seq} — TRACKING FAILURE ({r['n_orb']} poses < {MIN_ORB_POSES} threshold)"

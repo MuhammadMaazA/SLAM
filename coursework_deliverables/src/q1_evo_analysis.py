@@ -4,9 +4,17 @@ COMP0222 Coursework 2 - Question 1: EVO trajectory evaluation
 Generates ATE comparison plots for all Q1 experiments.
 
 Q1a: Baseline evaluation (KITTI07 + TUM)
-Q1b: Feature count variations
-Q1c: Outlier rejection disabled
-Q1d: Loop closure disabled
+Q1b: Feature count variations (controlled by the
+     ``ORBextractor.nFeatures`` key in the per-sequence YAML; see
+     ``data/part1_analysis/KITTI04-12_custom_f{500,250,100}.yaml`` and
+     ``TUM1_custom_f{800,500,250}.yaml``)
+Q1c: Outlier rejection disabled. Applied as a source patch to ORB-SLAM2:
+     ``src/orbslam2_patches/q1c_disable_outlier_rejection.patch``.
+     Trajectories in ``*-nooutlier.txt`` are produced by the patched
+     binary; see the accompanying README for rebuild instructions.
+Q1d: Loop closure disabled. Applied as a source patch to ORB-SLAM2:
+     ``src/orbslam2_patches/q1d_disable_loop_closure.patch``.
+     Trajectories in ``*-noloop.txt`` are produced by the patched binary.
 """
 
 import os
@@ -30,16 +38,46 @@ os.makedirs(OUT, exist_ok=True)
 # ──────────────────────────────────────────────────
 # HELPERS
 # ──────────────────────────────────────────────────
+_EVO_EXPECTED_EXC = (ValueError, RuntimeError, KeyError, IOError)
+
+# Trajectory dumps expected for a full Q1 reproduction (ORB-SLAM2 + rerun_all.sh q1_*).
+_Q1_EXPECTED_FILES = [
+    'kitti07-baseline.txt', 'kitti07-feat500.txt', 'kitti07-feat250.txt',
+    'kitti07-feat100.txt', 'kitti07-nooutlier.txt', 'kitti07-noloop.txt',
+    'tum-baseline.txt', 'tum-feat250.txt', 'tum-feat500.txt', 'tum-feat800.txt',
+    'tum-nooutlier.txt', 'tum-noloop.txt',
+]
+
+
+def print_q1_data_manifest():
+    """List missing trajectory files so missing plots are not mistaken for SLAM failure."""
+    missing = [f for f in _Q1_EXPECTED_FILES
+               if not os.path.exists(os.path.join(DATA, f))]
+    print('\n=== Q1 data manifest ===')
+    print(f'  DATA directory: {DATA}')
+    if not missing:
+        print('  All expected ORB trajectory dumps are present.')
+    else:
+        print(f'  Missing {len(missing)} file(s) (plots will show "no data" / init failed panels):')
+        for f in missing:
+            print(f'    - {f}')
+        print('  Generate them with ORB-SLAM2 after applying patches in')
+        print('    src/orbslam2_patches/ — see README there — then')
+        print('    coursework_deliverables/src/rerun_all.sh q1_kitti q1_tum_xyz')
+
+
 def load_traj(fname):
+    """Return an EVO trajectory for ``fname`` or ``None`` if the file is absent.
+
+    Only ``FileNotFoundError`` maps to a silent ``None`` (some Q1 ablations
+    are legitimately not runnable, e.g. KITTI07 feat<1000 which fails
+    ORB-SLAM2 monocular initialisation). All other I/O errors are re-raised
+    so real bugs (corrupt dumps, format mismatches) surface.
+    """
     path = os.path.join(DATA, fname)
     if not os.path.exists(path):
         return None
-    try:
-        t = file_interface.read_tum_trajectory_file(path)
-        return t
-    except Exception as e:
-        print(f"  [WARN] Could not load {fname}: {e}")
-        return None
+    return file_interface.read_tum_trajectory_file(path)
 
 
 def compute_ate(traj_est, traj_ref):
@@ -52,8 +90,11 @@ def compute_ate(traj_est, traj_ref):
         err_metric.process_data((traj_ref_s, traj_est_s))
         stats = err_metric.get_all_statistics()
         return stats, traj_est_s, traj_ref_s
-    except Exception as e:
-        print(f"  [WARN] ATE failed: {e}")
+    except _EVO_EXPECTED_EXC as e:
+        # Expected failures: trajectories with no temporal overlap, degenerate
+        # alignment (e.g. <3 common poses). These are legitimate "no ATE"
+        # situations, not silent bug-swallowing.
+        print(f"  [WARN] ATE alignment failed ({type(e).__name__}): {e}")
         return None, None, None
 
 
@@ -74,8 +115,8 @@ def compute_rpe(traj_est, traj_ref, delta=1.0, delta_unit=Unit.frames):
         stats = rpe.get_all_statistics()
         errs  = np.array(list(rpe.error))
         return stats, errs
-    except Exception as e:
-        print(f"  [WARN] RPE failed: {e}")
+    except _EVO_EXPECTED_EXC as e:
+        print(f"  [WARN] RPE alignment failed ({type(e).__name__}): {e}")
         return None, np.array([])
 
 
@@ -120,9 +161,9 @@ def plot_ate_over_time(ax, stats, traj_ref, traj_est, label, color='tab:blue'):
         ax.set_ylabel('ATE (m)', fontsize=8)
         ax.legend(fontsize=7)
         ax.grid(True, alpha=0.3)
-    except Exception as e:
-        ax.text(0.5, 0.5, str(e)[:40], ha='center', va='center',
-                transform=ax.transAxes, fontsize=7)
+    except _EVO_EXPECTED_EXC as e:
+        ax.text(0.5, 0.5, f'{type(e).__name__}: {str(e)[:40]}', ha='center',
+                va='center', transform=ax.transAxes, fontsize=7)
 
 
 # ──────────────────────────────────────────────────
@@ -175,10 +216,14 @@ def plot_q1b():
 
     fig, axes = plt.subplots(2, 4, figsize=(22, 10))
     fig.suptitle(
-        'Q1b: ORB Feature Count — Impact of Reducing Features on Tracking\n'
-        'KITTI07: all reductions fail (fast motion → sparse matches → RANSAC init threshold not met; verified by run logs)\n'
-        'TUM: 250 fails, 500 partial (1152/2557 poses), 800 full with 3× drift vs baseline',
-        fontsize=11, fontweight='bold')
+        'Q1b: ORB Feature Count — Impact on Monocular ORB-SLAM2 Tracking\n'
+        'KITTI07 (10 Hz, fast vehicle motion): feat<1000 fails the ≥100-inlier RANSAC '
+        'initialiser (hard-coded in the UCL ORB-SLAM2 build — verified from run logs '
+        '"The map is empty; nothing to save")\n'
+        'TUM freiburg3_long_office_household (30 Hz, indoor): feat=250 fails init, '
+        'feat=500 tracks 45 % of the sequence then loses, feat=800 tracks fully with '
+        '~3× the baseline drift, feat=1000 is the reference',
+        fontsize=10.5, fontweight='bold')
 
     # KITTI07 — explicit feature-count reduction from the 1000-feature baseline.
     kitti_gt = load_traj('kitti07-gt-tum.txt')
@@ -208,12 +253,13 @@ def plot_q1b():
         else:
             ate_vals_kitti.append(float('nan'))
             axes[0, col].text(0.5, 0.5,
-                              f'feat={label}\nInitialization\nFailed\n(log verified)',
+                              f'feat={label}\nMonocular init failed\n'
+                              f'(<100 RANSAC inliers during\n bootstrap; no map saved)',
                               ha='center', va='center',
                               transform=axes[0, col].transAxes,
-                              fontsize=12, color='red', fontweight='bold')
+                              fontsize=11, color='red', fontweight='bold')
             axes[0, col].set_title(f'KITTI07 feat={label}', fontsize=9)
-            print(f"  KITTI07 feat={label}: FAILED (empty map)")
+            print(f"  KITTI07 feat={label}: FAILED (monocular init — <100 inliers)")
 
     # TUM — compare a higher feature count against the corrected 1000-feature
     # baseline and a reduced-count run on the long sequence.
@@ -238,10 +284,11 @@ def plot_q1b():
                             title=f'TUM feat={label}')
         else:
             axes[1, col].text(0.5, 0.5,
-                              f'feat={label}\nInitialization\nFailed\n(log verified)',
+                              f'feat={label}\nMonocular init failed\n'
+                              f'(<100 RANSAC inliers during\n bootstrap; no map saved)',
                               ha='center', va='center',
                               transform=axes[1, col].transAxes,
-                              fontsize=12, color='red', fontweight='bold')
+                              fontsize=11, color='red', fontweight='bold')
             axes[1, col].set_title(f'TUM feat={label}', fontsize=9)
 
     # Row labels
@@ -575,6 +622,7 @@ def plot_q1_rpe():
 # MAIN
 # ──────────────────────────────────────────────────
 if __name__ == '__main__':
+    print_q1_data_manifest()
     plot_q1a()
     plot_q1b()
     plot_q1c()

@@ -208,55 +208,7 @@ q2_colmap_intrinsics() {
     local OUT_YAML="$DATA_DIR/q2_results/RealSense_D455_colmap_${SEQ}.yaml"
     need_file "$CAM" || return 1
     log "Q2a derive ORB-SLAM2 YAML from COLMAP intrinsics (${SEQ})"
-    run "$PYTHON - <<PY
-import os, sys, re
-cam='$CAM'; out='$OUT_YAML'
-vals=None
-for ln in open(cam):
-    if ln.startswith('#') or not ln.strip(): continue
-    p=ln.split()
-    # PINHOLE: id model W H fx fy cx cy
-    if p[1] in ('PINHOLE','SIMPLE_PINHOLE','OPENCV'):
-        W,H=int(p[2]),int(p[3])
-        if p[1]=='SIMPLE_PINHOLE':
-            f, cx, cy = map(float, p[4:7]); fx=fy=f
-        else:
-            fx,fy,cx,cy = map(float, p[4:8])
-        vals=(W,H,fx,fy,cx,cy); break
-assert vals, 'Could not parse COLMAP cameras.txt'
-W,H,fx,fy,cx,cy=vals
-open(out,'w').write(f'''%YAML:1.0
-# Auto-generated from COLMAP intrinsics for {SEQ}
-Camera.fx: {fx}
-Camera.fy: {fy}
-Camera.cx: {cx}
-Camera.cy: {cy}
-Camera.k1: 0.0
-Camera.k2: 0.0
-Camera.p1: 0.0
-Camera.p2: 0.0
-Camera.width:  {W}
-Camera.height: {H}
-Camera.fps: 30.0
-Camera.RGB: 1
-ORBextractor.nFeatures: 2000
-ORBextractor.scaleFactor: 1.2
-ORBextractor.nLevels: 8
-ORBextractor.iniThFAST: 20
-ORBextractor.minThFAST: 7
-Viewer.KeyFrameSize: 0.05
-Viewer.KeyFrameLineWidth: 1
-Viewer.GraphLineWidth: 0.9
-Viewer.PointSize: 2
-Viewer.CameraSize: 0.08
-Viewer.CameraLineWidth: 3
-Viewer.ViewpointX: 0
-Viewer.ViewpointY: -0.7
-Viewer.ViewpointZ: -1.8
-Viewer.ViewpointF: 500
-''')
-print('wrote', out)
-PY"
+    run "$PYTHON $REPO_ROOT/src/generate_orb_yaml_from_colmap.py --cameras \"$CAM\" --out \"$OUT_YAML\""
     # Re-run ORB-SLAM2 on the target sequence with the COLMAP YAML
     local OUT_TXT="$DATA_DIR/q2_results/orbslam_runs/${SEQ}_trajectory_colmap_intrinsics.txt"
     orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$OUT_YAML" "$SLAM_REC1/${SEQ}/camera" "$OUT_TXT" || \
@@ -278,6 +230,17 @@ q3_python() {
     run "$PYTHON $REPO_ROOT/src/q3_lidar_slam_complete.py"
 }
 
+q_factor_graph_demo() {
+    log "Synthetic factor-graph GN demo (writes factor_graph_demo_synthetic.png)"
+    run "$PYTHON $REPO_ROOT/src/factor_graph_optimization.py"
+}
+
+q_merge_coursework_videos() {
+    log "Concatenate Q2c + Q3e MP4 (ffmpeg; set SLAM_VIDEO_Q2 / SLAM_VIDEO_Q3 / SLAM_VIDEO_MERGED)"
+    need_bin ffmpeg || return 1
+    run "$PYTHON $REPO_ROOT/src/merge_coursework_videos.py"
+}
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Dispatcher
 # ──────────────────────────────────────────────────────────────────────────────
@@ -291,6 +254,8 @@ STEPS=(
     q2_colmap_intrinsics
     q2_python_plots
     q3_python
+    q_factor_graph_demo
+    q_merge_coursework_videos
 )
 
 usage() {
@@ -309,6 +274,8 @@ Available steps (run sequentially in listed order when "all"):
   q2_colmap_intrinsics  Derive ORB-SLAM2 YAML from COLMAP intrinsics, re-run
   q2_python_plots       Q2 visual / EVO / 3D point-cloud figures
   q3_python             Q3 LiDAR SLAM + factor-graph figures
+  q_factor_graph_demo   Synthetic 3-pose factor-graph demo (PNG)
+  q_merge_coursework_videos  ffmpeg concat of Q2c + Q3e MP4s (optional)
 USAGE
 }
 

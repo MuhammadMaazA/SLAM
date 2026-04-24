@@ -16,11 +16,20 @@ import cv2
 
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 _ROOT       = os.path.abspath(os.path.join(_HERE, '..'))
-_REC1       = os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data',
-                            'tmp_recordings', 'tmp_recordings')
-ORBSLAM_DIR = os.path.join(_ROOT, 'data', 'q2_results', 'orbslam_runs')
-COLMAP_DIR  = os.path.join(_ROOT, 'data', 'q2_results', 'colmap_runs')
-OUT_VIDEO   = os.path.join(_ROOT, '..', 'COMP0222_CW2_GRP_32_Visual_SLAM.mp4')
+# Honour SLAM_REC1 so collaborators on different machines don't need
+# to hard-code ~/SLAM/... . Falls back to the reference path when unset.
+_REC1       = os.environ.get(
+    'SLAM_REC1',
+    os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data',
+                 'tmp_recordings', 'tmp_recordings'),
+)
+_SLAM_DATA = os.environ.get('SLAM_DATA', os.path.join(_ROOT, 'data'))
+ORBSLAM_DIR = os.path.join(_SLAM_DATA, 'q2_results', 'orbslam_runs')
+COLMAP_DIR  = os.path.join(_SLAM_DATA, 'q2_results', 'colmap_runs')
+OUT_VIDEO   = os.environ.get(
+    'SLAM_VIDEO_Q2',
+    os.path.join(_ROOT, '..', 'COMP0222_CW2_GRP_32_Visual_SLAM.mp4'),
+)
 
 SEQUENCES = [
     ('Basement_1',     'indoor'),

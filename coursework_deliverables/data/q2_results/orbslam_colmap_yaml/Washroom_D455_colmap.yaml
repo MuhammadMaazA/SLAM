@@ -1,0 +1,38 @@
+%YAML:1.0
+# ORB-SLAM2 intrinsics for sequence 'Washroom' using COLMAP-refined calibration.
+# Source: coursework_deliverables/data/q2_results/colmap_runs/Washroom_sparse/cameras.txt
+# Model: OPENCV (5-parameter radial-tangential).
+# Image size: 848x480
+
+Camera.fx: 433.474370
+Camera.fy: 440.600082
+Camera.cx: 425.341000
+Camera.cy: 247.517000
+
+Camera.k1: -0.030770
+Camera.k2: 0.028456
+Camera.p1: -0.001135
+Camera.p2: 0.000170
+
+Camera.width:  848
+Camera.height: 480
+
+Camera.fps: 30.0
+Camera.RGB: 1
+
+ORBextractor.nFeatures: 1000
+ORBextractor.scaleFactor: 1.2
+ORBextractor.nLevels: 8
+ORBextractor.iniThFAST: 20
+ORBextractor.minThFAST: 7
+
+Viewer.KeyFrameSize: 0.05
+Viewer.KeyFrameLineWidth: 1
+Viewer.GraphLineWidth: 0.9
+Viewer.PointSize: 2
+Viewer.CameraSize: 0.08
+Viewer.CameraLineWidth: 3
+Viewer.ViewpointX: 0
+Viewer.ViewpointY: -0.7
+Viewer.ViewpointZ: -1.8
+Viewer.ViewpointF: 500

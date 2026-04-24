@@ -1,0 +1,28 @@
+From: COMP0222 CW2 Group 32
+Subject: [PATCH] Q1d: disable loop closure after dequeuing the current KF
+
+Applies to: raulmur/ORB_SLAM2 (master)
+
+---
+ src/LoopClosing.cc | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/LoopClosing.cc b/src/LoopClosing.cc
+--- a/src/LoopClosing.cc
++++ b/src/LoopClosing.cc
+@@ -110,6 +110,15 @@ bool LoopClosing::DetectLoop()
+         mpCurrentKF->SetNotErase();
+     }
+ 
++    // COMP0222 Q1d
++    const bool kDisableLoopClosure = true;
++    if (kDisableLoopClosure)
++    {
++        mpKeyFrameDB->add(mpCurrentKF);
++        mpCurrentKF->SetErase();
++        return false;
++    }
++
+     //If the map contains less than 10 KF or less than 10 KF have passed from last loop detection
+     if(mpCurrentKF->mnId<mLastLoopKFid+10)
+     {
