@@ -1,10 +1,10 @@
 # Documentation (local notes, not for repo)
 documentation/
 
-# Raw dataset zips (not coursework output)
+# Raw dataset zips and extracted frames (not coursework output)
 datasets/
-# Over GitHub 2GB LFS limit
-extracted_data/KITTI/dataset/sequences/00.zip
+extracted_data/
+COMP0222_CW2_GRP_1.zip
 
 # Scratch/temp
 lecture_materials/
