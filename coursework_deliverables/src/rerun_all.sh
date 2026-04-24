@@ -200,19 +200,18 @@ q2_colmap_scratch() {
 }
 
 q2_colmap_intrinsics() {
-    # Regenerate a D455 YAML from COLMAP's auto-estimated intrinsics
-    # (addresses the "COLMAP-derived calibration" ask). Picks Basement_1 by
-    # default — tweak SEQ to taste.
-    local SEQ="${COLMAP_INTRINSIC_SEQ:-Basement_1}"
-    local CAM="$DATA_DIR/q2_results/colmap_runs/${SEQ}_sparse/cameras.txt"
-    local OUT_YAML="$DATA_DIR/q2_results/RealSense_D455_colmap_${SEQ}.yaml"
-    need_file "$CAM" || return 1
-    log "Q2a derive ORB-SLAM2 YAML from COLMAP intrinsics (${SEQ})"
-    run "$PYTHON $REPO_ROOT/src/generate_orb_yaml_from_colmap.py --cameras \"$CAM\" --out \"$OUT_YAML\""
-    # Re-run ORB-SLAM2 on the target sequence with the COLMAP YAML
-    local OUT_TXT="$DATA_DIR/q2_results/orbslam_runs/${SEQ}_trajectory_colmap_intrinsics.txt"
-    orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$OUT_YAML" "$SLAM_REC1/${SEQ}/camera" "$OUT_TXT" || \
-        orbslam_run "$ORBSLAM_BIN_TUM_BASELINE" "$OUT_YAML" "$SLAM_REC2/${SEQ}/camera" "$OUT_TXT" || true
+    # Audit fix: don't stop at "we have calibrated intrinsics". Generate the
+    # per-sequence ORB-SLAM2 YAMLs from COLMAP and re-run the custom sequences
+    # so the calibrated trajectories are first-class outputs.
+    log "Q2a derive ORB-SLAM2 YAMLs from COLMAP intrinsics and re-run calibrated trajectories"
+    run "$PYTHON $REPO_ROOT/src/q2_calibration_report.py"
+    ORBSLAM="$ORBSLAM_BIN_TUM_BASELINE" \
+    YAML_STD="$D455_YAML" YAML_LOW="$D455_YAML_LOW" \
+    YAML_DIR_COLMAP="$DATA_DIR/q2_results/orbslam_colmap_yaml" \
+    Q2_USE_COLMAP_YAMLS=1 OUT_SUFFIX="_trajectory_colmap_intrinsics" \
+    REC1="$SLAM_REC1" REC2="$SLAM_REC2" \
+    OUT="$DATA_DIR/q2_results/orbslam_runs" \
+    bash "$_SCRIPT_DIR/run_orbslam_all.sh"
 }
 
 q2_python_plots() {

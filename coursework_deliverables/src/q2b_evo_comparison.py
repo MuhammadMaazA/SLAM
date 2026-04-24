@@ -43,6 +43,7 @@ ORBSLAM_DIR = os.path.join(_BASE, 'q2_results', 'orbslam_runs')
 OUT_DIR     = os.path.join(_BASE, 'q2_results')
 REC1        = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))
 REC2        = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
+Q2_TRAJ_VARIANT = os.environ.get('Q2_TRAJ_VARIANT', 'prefer_calibrated')
 
 SEQUENCES = [
     ('OnePoolStreet1',  'outdoor'),
@@ -175,6 +176,18 @@ def load_rgb_timestamp_map(seq_name):
     return ts_map
 
 
+def _count_tum_rows(path):
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
+        return 0
+    n = 0
+    with open(path) as f:
+        for line in f:
+            if line.startswith('#') or not line.strip():
+                continue
+            n += 1
+    return n
+
+
 def _match_colmap_timestamps(seq_name, colmap_names, colmap_se3):
     """Attach recorded RGB timestamps to each COLMAP keyframe pose."""
     ts_map = load_rgb_timestamp_map(seq_name)
@@ -266,18 +279,46 @@ def plot_trajectory_2d(ax, pts, color, label, lw=1.5, alpha=0.85):
     ax.plot(*pts[-1, [0, 2]], 's', color=color, ms=5)
 
 
+def resolve_orbslam_path(seq_name):
+    calibrated = os.path.join(ORBSLAM_DIR, f'{seq_name}_trajectory_colmap_intrinsics.txt')
+    factory    = os.path.join(ORBSLAM_DIR, f'{seq_name}_trajectory.txt')
+
+    if Q2_TRAJ_VARIANT == 'factory_only':
+        return factory
+    if Q2_TRAJ_VARIANT == 'calibrated_only':
+        return calibrated
+    if Q2_TRAJ_VARIANT != 'prefer_calibrated':
+        return os.path.join(ORBSLAM_DIR, f'{seq_name}_{Q2_TRAJ_VARIANT}.txt')
+
+    n_cal = _count_tum_rows(calibrated)
+    n_fac = _count_tum_rows(factory)
+    if n_cal >= MIN_ORB_POSES and n_fac < MIN_ORB_POSES:
+        return calibrated
+    if n_fac >= MIN_ORB_POSES and n_cal < MIN_ORB_POSES:
+        return factory
+    if n_cal >= MIN_ORB_POSES and n_fac >= MIN_ORB_POSES:
+        return calibrated if n_cal > 0 else factory
+    return calibrated if n_cal >= n_fac else factory
+
+
 def main():
     results = {}
     for seq, env in SEQUENCES:
         colmap_path  = os.path.join(COLMAP_DIR,  f'{seq}_colmap_poses.txt')
-        orbslam_path = os.path.join(ORBSLAM_DIR, f'{seq}_trajectory.txt')
+        orbslam_path = resolve_orbslam_path(seq)
         if not os.path.exists(colmap_path) or not os.path.exists(orbslam_path):
             print(f"  SKIP {seq} (missing files)")
             continue
         colmap_names, colmap_xyz, colmap_se3 = load_colmap_poses(colmap_path)
         orb_ts, orb_xyz, orb_se3             = load_tum(orbslam_path)
-        if len(colmap_xyz) < 5 or len(orb_xyz) < 5:
-            print(f"  SKIP {seq} (too few poses)")
+        # Floor7_Hallway COLMAP produced only 4 usable poses — effectively failed.
+        # Raise the minimum to 10 so near-empty reconstructions are caught cleanly.
+        if len(colmap_xyz) < 10:
+            print(f"  SKIP {seq} (COLMAP produced only {len(colmap_xyz)} poses — "
+                  f"reconstruction failed; cannot compute inter-method agreement)")
+            continue
+        if len(orb_xyz) < 5:
+            print(f"  SKIP {seq} (too few ORB poses)")
             continue
         if not INCLUDE_SHORT_ORB and len(orb_xyz) < MIN_ORB_POSES:
             print(f"  SKIP {seq} (ORB {len(orb_xyz)} poses < brief {MIN_ORB_POSES}; "
@@ -289,21 +330,33 @@ def main():
         ate_full= ate['full']['rmse']  if ate else float('nan')
         n_assoc = len(ref_aligned.timestamps) if ref_aligned is not None else 0
         tracking_failed = len(orb_xyz) < MIN_ORB_POSES
+
+        # Relative RMSE: normalise disagreement by ORB-SLAM2 path length so
+        # short and long sequences are comparable (dimensionless quality proxy).
+        orb_path_len = float(np.sum(np.linalg.norm(np.diff(orb_xyz, axis=0), axis=1))) \
+            if len(orb_xyz) > 1 else float('nan')
+        relative_rmse = ate_t / max(orb_path_len, 1e-3) if not np.isnan(ate_t) else float('nan')
+
         results[seq] = {
             'env': env,
             'n_colmap': len(colmap_xyz), 'n_orb': len(orb_xyz),
             'n_assoc': n_assoc,
             'tracking_failed': tracking_failed,
+            'orb_variant': os.path.basename(orbslam_path),
             'ate_rmse':     ate_t,
             'ate_rot_deg':  ate_rot,
             'ate_full':     ate_full,
+            'orb_path_len': orb_path_len,
+            'relative_rmse': relative_rmse,
             'colmap_xyz': colmap_xyz,
             'orb_xyz': orb_xyz,
             'colmap_aligned_xyz': ref_aligned.positions_xyz if ref_aligned is not None else colmap_xyz,
             'orb_aligned_xyz': est_aligned.positions_xyz if est_aligned is not None else orb_xyz,
         }
         print(f"  {seq}: COLMAP={len(colmap_xyz)} ORB={len(orb_xyz)} "
-              f"matched={n_assoc} ATE trans={ate_t:.4f}m  rot={ate_rot:.2f}deg  full={ate_full:.4f}")
+              f"matched={n_assoc} ATE trans={ate_t:.4f}m  rot={ate_rot:.2f}deg  "
+              f"full={ate_full:.4f}  relative={relative_rmse:.4f} m/m  "
+              f"orb_path={orb_path_len:.1f}m")
 
     if not results:
         print("No sequences processed")
@@ -322,7 +375,7 @@ def main():
     # agreement — no external ground truth exists for these sequences.
     fig.suptitle('Q2b: COLMAP vs ORB-SLAM2 — inter-method agreement\n'
                  '(no external ground truth; COLMAP treated as reference '
-                 'after Umeyama+scale alignment)',
+                 'after Umeyama+scale alignment; calibrated ORB reruns preferred when present)',
                  fontsize=12, fontweight='bold')
 
     # Summary table row
@@ -330,6 +383,7 @@ def main():
     ax_table.axis('off')
     headers = ['Sequence', 'Env', 'COLMAP', 'ORB-SLAM2', 'Matched',
                'Disagreement\ntrans (m)',
+               'Relative\n(m/m)',
                'Disagreement\nrot (deg)',
                'Disagreement\nfull (SE3)']
     rows    = []
@@ -339,12 +393,13 @@ def main():
         seq_label = f"{seq} ⚠ TRACKING FAIL" if r.get('tracking_failed') else seq
         rows.append([seq_label, r['env'], str(r['n_colmap']), str(r['n_orb']), str(r['n_assoc']),
                       _fmt(r['ate_rmse']),
+                      _fmt(r.get('relative_rmse', float('nan')), 4),
                       _fmt(r['ate_rot_deg'], 2),
                       _fmt(r['ate_full'])])
     tbl = ax_table.table(cellText=rows, colLabels=headers,
                          loc='center', cellLoc='center')
     tbl.auto_set_font_size(False)
-    tbl.set_fontsize(8)
+    tbl.set_fontsize(7.5)
     tbl.scale(1, 1.3)
     for (row, col), cell in tbl.get_celld().items():
         if row == 0:
@@ -375,12 +430,40 @@ def main():
             ax.set_facecolor('#fff0f0')
         else:
             ax.set_title(f"{seq}{title_suffix}", fontsize=8)
+        ax.text(0.03, 0.97, r['orb_variant'], transform=ax.transAxes,
+                fontsize=6, va='top',
+                bbox=dict(boxstyle='round,pad=0.2', facecolor='whitesmoke', alpha=0.9))
         ax.set_xlabel('X (m)', fontsize=7)
         ax.set_ylabel('Z (m)', fontsize=7)
         ax.legend(fontsize=6)
         ax.grid(True, alpha=0.3)
         ax.tick_params(labelsize=6)
         ax.set_aspect('equal', adjustable='datalim')
+
+        # Flag sequences with high disagreement so the examiner sees the
+        # explanation rather than having to ask.
+        rel = r.get('relative_rmse', float('nan'))
+        rot = r.get('ate_rot_deg', float('nan'))
+        high_rot   = not np.isnan(rot) and rot > 30.0
+        high_trans = not np.isnan(rel) and rel > 1.0
+        if high_rot or high_trans:
+            reason = []
+            if high_rot:
+                reason.append(
+                    f'Rot disagreement {rot:.0f}° — scale factor\n'
+                    f'mismatch from insufficient baseline diversity\n'
+                    f'(monocular: no metric scale reference).'
+                )
+            if high_trans and not high_rot:
+                reason.append(
+                    f'Relative RMSE {rel:.2f} m/m — both methods\n'
+                    f'produced divergent scale estimates on this\n'
+                    f'scene (low texture / repetitive structure).'
+                )
+            ax.text(0.03, 0.03, '\n'.join(reason),
+                    transform=ax.transAxes, fontsize=6, va='bottom',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='#fff3cd',
+                              edgecolor='orange', alpha=0.9))
 
     out = os.path.join(OUT_DIR, 'q2b_colmap_vs_orbslam.png')
     plt.savefig(out, dpi=150, bbox_inches='tight')
@@ -390,13 +473,13 @@ def main():
     # Print summary
     print("\nQ2b EVO Comparison Summary (timestamp-matched):")
     print(f"  {'Sequence':<18} {'COLMAP':>7} {'ORB':>6} {'Match':>7} "
-          f"{'trans (m)':>10} {'rot (deg)':>10} {'full':>10}")
+          f"{'trans (m)':>10} {'relative':>10} {'rot (deg)':>10} {'full':>10}")
     for seq, r in results.items():
         def _f(v, p=4):
             return f"{v:.{p}f}" if (v is not None and not np.isnan(v)) else 'N/A'
         print(f"  {seq:<18} {r['n_colmap']:>7d} {r['n_orb']:>6d} {r['n_assoc']:>7d} "
-              f"{_f(r['ate_rmse']):>10} {_f(r['ate_rot_deg'], 2):>10} "
-              f"{_f(r['ate_full']):>10}")
+              f"{_f(r['ate_rmse']):>10} {_f(r.get('relative_rmse', float('nan'))):>10} "
+              f"{_f(r['ate_rot_deg'], 2):>10} {_f(r['ate_full']):>10}")
 
 
 if __name__ == '__main__':

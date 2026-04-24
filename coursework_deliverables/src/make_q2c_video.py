@@ -110,22 +110,33 @@ def frame_at_progress(rgb_index, progress):
 # ── Load data ─────────────────────────────────────────────────────────────────
 print("Loading sequences...")
 all_data = []
+def _best_traj(seq):
+    """Prefer COLMAP-calibrated trajectory when it has ≥500 poses."""
+    cal = os.path.join(ORBSLAM_DIR, f'{seq}_trajectory_colmap_intrinsics.txt')
+    fac = os.path.join(ORBSLAM_DIR, f'{seq}_trajectory.txt')
+    ts_c, xyz_c = load_tum(cal)
+    if len(xyz_c) >= 500:
+        return ts_c, xyz_c, '(calibrated)'
+    ts_f, xyz_f = load_tum(fac)
+    return ts_f, xyz_f, '(factory)'
+
 for seq, env in SEQUENCES:
     rgb_idx = load_rgb_index(seq)
-    ts, xyz = load_tum(os.path.join(ORBSLAM_DIR, f'{seq}_trajectory.txt'))
+    ts, xyz, variant = _best_traj(seq)
     colmap  = load_colmap(os.path.join(COLMAP_DIR, f'{seq}_colmap_poses.txt'))
     all_data.append({
         'name': seq, 'env': env,
         'rgb': rgb_idx, 'ts': ts, 'xyz': xyz, 'colmap': colmap,
+        'variant': variant,
     })
-    print(f"  {seq}: {len(rgb_idx)} frames  ORB={len(xyz)} poses  COLMAP={len(colmap)}")
+    print(f"  {seq}: {len(rgb_idx)} frames  ORB={len(xyz)} poses {variant}  COLMAP={len(colmap)}")
 
 
 # ── Figure layout ─────────────────────────────────────────────────────────────
 # 2 rows × 3 cols: top = camera, bottom = trajectory
 fig = plt.figure(figsize=(18, 10), facecolor='#0d1117', dpi=DPI)
 fig.suptitle(
-    'COMP0222 CW2 Group 32  |  Visual SLAM  |  Camera feed + ORB-SLAM2 trajectory',
+    'COMP0222 CW2 Group 32  |  Visual SLAM',
     color='white', fontsize=12, fontweight='bold', y=0.995)
 
 gs = gridspec.GridSpec(2, 3, figure=fig,
@@ -140,6 +151,37 @@ for ax in cam_axes + traj_axes:
     ax.set_facecolor('#0d1117')
     for sp in ax.spines.values():
         sp.set_edgecolor('#2a2a2a')
+
+# ── Pick best 2D projection and stable axis limits per sequence ───────────────
+# ORB-SLAM2 monocular uses camera frame: X=right, Y=down, Z=forward.
+# X-Z is the natural top-down view, but if Z variance >> X variance (corridor)
+# the trajectory looks like a dot.  We pick the two axes with the most spread.
+def _best_axes(xyz):
+    if len(xyz) < 2:
+        return 0, 2
+    spans = [(xyz[:, i].max() - xyz[:, i].min(), i) for i in range(3)]
+    spans.sort(reverse=True)
+    a0, a1 = spans[0][1], spans[1][1]
+    return min(a0, a1), max(a0, a1)   # keep consistent order
+
+def _stable_lims(vals, pad=0.12):
+    lo, hi = vals.min(), vals.max()
+    margin = max((hi - lo) * pad, 0.1)
+    return lo - margin, hi + margin
+
+traj_axes_idx = []
+traj_limits   = []
+for d in all_data:
+    xyz = d['xyz']
+    if len(xyz) >= 2:
+        a0, a1 = _best_axes(xyz)
+        xl = _stable_lims(xyz[:, a0])
+        yl = _stable_lims(xyz[:, a1])
+    else:
+        a0, a1 = 0, 2
+        xl = yl = (-1, 1)
+    traj_axes_idx.append((a0, a1))
+    traj_limits.append((xl, yl))
 
 fig.canvas.draw()
 buf = fig.canvas.buffer_rgba()
@@ -166,13 +208,12 @@ for frame in range(N_FRAMES):
         for sp in ax_cam.spines.values():
             sp.set_edgecolor('#333')
         bgr = frame_at_progress(d['rgb'], progress)
-        rgb_img = bgr[:, :, ::-1]
-        ax_cam.imshow(rgb_img, aspect='auto')
+        ax_cam.imshow(bgr[:, :, ::-1], aspect='auto')
         ax_cam.set_xticks([]); ax_cam.set_yticks([])
-        env_label = '[Indoor]' if d['env'] == 'indoor' else '[Outdoor]'
-        ax_cam.set_title(
-            f"{d['name']}  |  {env_label}",
-            color='white', fontsize=9, fontweight='bold', pad=3)
+        env_label = '[Indoor (large)]' if d['name'] == 'Floor7_Hallway' else \
+                    '[Indoor]' if d['env'] == 'indoor' else '[Outdoor]'
+        ax_cam.set_title(f"{d['name']}  |  {env_label}",
+                         color='white', fontsize=9, fontweight='bold', pad=3)
 
         # ── Bottom: trajectory ───────────────────────────────────────────────
         ax_tr = traj_axes[i]
@@ -181,35 +222,29 @@ for frame in range(N_FRAMES):
         for sp in ax_tr.spines.values():
             sp.set_edgecolor('#333')
 
-        xyz  = d['xyz']
-        colm = d['colmap']
+        xyz    = d['xyz']
         n_show = max(2, int(progress * len(xyz))) if len(xyz) else 0
+        a0, a1 = traj_axes_idx[i]
+        (xl0, xl1), (yl0, yl1) = traj_limits[i]
+        ax_labels = ['X', 'Y', 'Z']
 
-        # ORB-SLAM2 trajectory — draw first so its extent sets axis limits
         if n_show >= 2:
             sub = xyz[:n_show]
-            ax_tr.plot(sub[:, 0], sub[:, 2],
-                       color=color, lw=2.5, alpha=0.95, zorder=3)
-            ax_tr.plot(sub[0, 0],  sub[0, 2],  'o', color='#00ff88', ms=9, zorder=5)
-            ax_tr.plot(sub[-1, 0], sub[-1, 2], 's', color='#ff3333', ms=9, zorder=5)
-            # Fix axis limits to ORB trajectory with 15% padding
-            xpad = max((sub[:, 0].max() - sub[:, 0].min()) * 0.15, 0.3)
-            zpad = max((sub[:, 2].max() - sub[:, 2].min()) * 0.15, 0.3)
-            ax_tr.set_xlim(sub[:, 0].min() - xpad, sub[:, 0].max() + xpad)
-            ax_tr.set_ylim(sub[:, 2].min() - zpad, sub[:, 2].max() + zpad)
+            ax_tr.plot(sub[:, a0], sub[:, a1],
+                       color=color, lw=2.2, alpha=0.95, zorder=3)
+            ax_tr.plot(sub[0, a0],  sub[0, a1],  'o', color='#00ff88', ms=8, zorder=5)
+            ax_tr.plot(sub[-1, a0], sub[-1, a1], 's', color='#ff3333', ms=8, zorder=5)
 
-        # COLMAP reference — faint, added after limits are fixed
-        if len(colm) >= 5:
-            ax_tr.scatter(colm[:, 0], colm[:, 2],
-                          c='#555555', s=3, alpha=0.5, zorder=1)
+        # Stable limits — no equal aspect so the trajectory fills the subplot
+        ax_tr.set_xlim(xl0, xl1)
+        ax_tr.set_ylim(yl0, yl1)
 
         pct = 100 * n_show / max(len(xyz), 1)
-        ax_tr.set_title(
-            f'ORB-SLAM2  {n_show}/{len(xyz)} poses ({pct:.0f}%)',
-            color='#aaa', fontsize=8, pad=3)
+        ax_tr.set_title(f'{n_show}/{len(xyz)} poses  ({pct:.0f}%)',
+                        color='#aaa', fontsize=8, pad=3)
         ax_tr.tick_params(colors='#555', labelsize=6)
-        ax_tr.set_xlabel('X (m)', color='#666', fontsize=7)
-        ax_tr.set_ylabel('Z (m)', color='#666', fontsize=7)
+        ax_tr.set_xlabel(f'{ax_labels[a0]} (m)', color='#666', fontsize=7)
+        ax_tr.set_ylabel(f'{ax_labels[a1]} (m)', color='#666', fontsize=7)
 
     fig.canvas.draw()
     buf = fig.canvas.buffer_rgba()

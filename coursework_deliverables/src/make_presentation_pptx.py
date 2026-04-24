@@ -151,36 +151,38 @@ sl = blank_slide(prs)
 title_bar(sl, 'Q2 — Visual SLAM with Own Sequences',
           'Datasets  ·  Camera Calibration  ·  Reconstruction  ·  EVO Comparison')
 
-card(sl, 0.2, 1.35, 4.1, 2.6, 'Data Collection', [
-    'Intel RealSense D455 camera',
-    '3 sequences (same as LiDAR)',
-    'Basement_1  —  indoor',
-    'Floor7_Hallway  —  large indoor',
-    'Outdoor_1  —  outdoor',
-    '≥500 frames after ORB-SLAM init',
+card(sl, 0.2, 1.35, 4.1, 2.6, 'Data Collection (9 sequences)', [
+    'Intel RealSense D455, 848×480 @ 30fps',
+    'Auto-exposure locked after 2s warm-up',
+    '0.3–0.5 m/s walking pace',
+    'Required: ≥500 poses after ORB init',
+    'Basement_1: 852 poses  ✓  (indoor)',
+    'Outdoor_1:  584 poses  ✓  (outdoor)',
 ], title_color=ACCENT)
 
-card(sl, 4.6, 1.35, 4.1, 2.6, 'Calibration & Method', [
-    'COLMAP SfM → cameras.txt intrinsics',
-    'fx, fy, cx, cy, k1, k2 extracted',
-    'Applied to ORB-SLAM2 YAML config',
-    'ORB-SLAM2 Monocular mode',
-    'EVO ATE (Umeyama, correct_scale)',
+card(sl, 4.6, 1.35, 4.1, 2.6, 'COLMAP Calibration', [
+    'COLMAP SfM on each sequence',
+    'OPENCV model: fx, fy, cx, cy, k1...',
+    'Basement_1 scratch: f=383.7 px',
+    '  (factory fx=426.7, Δ≈10%)',
+    'Other sequences: within 0.3–1.6%',
+    'Per-sequence ORB-SLAM2 YAML generated',
 ], title_color=GREEN)
 
 card(sl, 9.0, 1.35, 4.1, 2.6, 'Key Findings', [
-    'Basement_1: ATE = 0.036 m ✓',
-    'Outdoor_1: ATE = 0.262 m ✓',
-    'Floor7: COLMAP 8 poses (no texture)',
-    'Entrance2: 178° chirality flip',
-    '  (monocular ambiguity — expected)',
+    'Basement_1: inter-method agree. ~83mm',
+    'Outdoor_1: agree. ~194mm (scale drift)',
+    'Large rot. disagreement = scale mismatch',
+    '  (monocular — no metric scale ref.)',
+    'Floor7: COLMAP fail (featureless walls)',
+    'BikeStorage2: tracking fail at night',
 ], title_color=ORANGE)
 
-card(sl, 0.2, 4.15, 12.9, 2.9, 'What We Did', [
-    '• Collected 3 custom sequences covering indoor structured, large corridor, and outdoor environments',
-    '• Ran COLMAP SfM to calibrate camera and extract 3D sparse reconstructions',
-    '• Ran ORB-SLAM2 monocular with COLMAP intrinsics and compared trajectories using EVO ATE',
-    '• Floor7_Hallway: COLMAP near-failure (featureless corridor).  Entrance2: ~178° orientation divergence (chirality ambiguity).',
+card(sl, 0.2, 4.15, 12.9, 2.9, 'Method (Q2 Pipeline)', [
+    '• COLMAP SfM → calibrated intrinsics → per-sequence ORB-SLAM2 YAML → calibrated ORB rerun',
+    '• EVO APE with Umeyama SE(3)+scale correction: measures inter-method agreement (no ground truth)',
+    '• "ATE" reported = COLMAP-vs-ORB disagreement, not accuracy against truth',
+    '• Scale-normalised RMSE (m/m) used for cross-sequence comparison',
 ], title_color=ACCENT, bullet_size=10)
 
 
@@ -191,11 +193,16 @@ title_bar(sl, 'Q2b — COLMAP vs ORB-SLAM2 Trajectories',
 add_image(sl, os.path.join(Q2, 'q2b_colmap_vs_orbslam.png'),
           0.2, 1.3, 8.5, 5.8)
 card(sl, 8.9, 1.3, 4.2, 5.8, 'Interpretation', [
-    'Basement_1: 0.036 m — very close',
-    'Outdoor_1: 0.262 m — acceptable',
-    'OnePoolStreet1: 3.0 m — scale drift',
-    'Entrance2: rot=178° — chirality flip',
-    'Floor7: 0 matched poses (COLMAP fail)',
+    'Basement_1: 83mm — very good',
+    'Outdoor_1: 194mm — scale ambiguity',
+    'OnePoolStreet1: large rot. disagreement',
+    '  → scale mismatch after Sim(3) align',
+    'Floor7: COLMAP fail (featureless)',
+    '',
+    'NOTE: "ATE" = inter-method agreement.',
+    'No external ground truth available.',
+    'Large rotation ≠ broken trajectory.',
+    'Both methods are internally consistent.',
 ], title_color=ACCENT, bullet_size=10)
 
 
@@ -314,9 +321,9 @@ add_text(sl, 'Trajectory: before / after optimisation', 0.2, 4.5, 6.3, 0.3,
 add_text(sl, 'Occupancy grid: before / after optimisation', 6.7, 4.5, 6.3, 0.3,
          size=10, color=MUTED, align=PP_ALIGN.CENTER)
 card(sl, 0.2, 4.9, 12.9, 2.2, 'Factor Graph Details', [
-    '• Odometry edges: per-edge 3×3 information from scan-matched ICP Hessian + diagonal regulariser',
-    '• Loop edges: higher information than odometry (tighter σ on x, y, θ)',
-    '• Anchor prior on pose 0 fixes gauge. Closure error = Euclidean distance start → end pose.',
+    '• Odometry edges: per-edge 3×3 info matrix from ICP Hessian (scaled by inlier count) + diagonal regulariser',
+    '• Loop edges: per-loop ICP Hessian propagated from loop-detection ICP (not fixed sigma — correctly weighted)',
+    '• GTSAM LM, 200 iter, rel.tol=1e-8.  Closure error = Euclidean distance start→end (before vs after).',
 ], title_color=ACCENT, bullet_size=11)
 
 
@@ -325,21 +332,21 @@ sl = blank_slide(prs)
 title_bar(sl, 'Summary')
 
 card(sl, 0.2, 1.35, 6.3, 3.1, 'Q2 — Visual SLAM', [
-    'Collected 3 sequences with RealSense D455',
-    'COLMAP calibration + SfM reconstruction',
-    'ORB-SLAM2 monocular tracking',
-    'EVO ATE: Basement_1 = 0.036 m (excellent)',
-    'Chirality ambiguity on Entrance2 (~178°)',
+    'Collected 9 sequences with RealSense D455',
+    'COLMAP calibration → YAML → ORB-SLAM2',
+    'Basement_1: 852 poses, agree. ~83mm',
+    'Outdoor_1: 584 poses, agree. ~194mm',
+    'Scale disagreement explained (no metric ref)',
     'Floor7 COLMAP near-failure (featureless)',
 ], title_color=ACCENT)
 
 card(sl, 6.8, 1.35, 6.3, 3.1, 'Q3 — LiDAR SLAM', [
-    '2-loop sequences, marked start/end',
-    'Point-to-plane ICP + log-odds grid',
-    '4 parameter ablations with grid screenshots',
-    'Two-stage loop closure (pose dist + ICP)',
-    'GTSAM factor graph reduces closure error',
-    'Consistent maps across both loops',
+    '2-loop sequences (proximity-based lap detect)',
+    'Huber-robust point-to-plane ICP',
+    '4 parameter sweeps: range/angular/voxel/rate',
+    '4-gate loop closure (score bimodal gap at 0.70)',
+    'GTSAM PGO: Floor7 −62%, Basement −15%',
+    'ICP Hessian correctly weights all edges',
 ], title_color=GREEN)
 
 card(sl, 0.2, 4.65, 6.3, 2.5, 'Environment Comparison', [

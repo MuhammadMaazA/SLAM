@@ -1,0 +1,1172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visual &amp; LiDAR SLAM — COMP0222 CW2 · Group 32</title>
+<style>
+/* ================================================================
+   SLAM Defence Deck — matte black, amber accent, SF Pro
+   Group 32 — COMP0222 CW2
+   ================================================================ */
+
+:root {
+  --bg:       #000000;
+  --bg-2:     #0A0A0B;
+  --panel:    #0E0E10;
+  --panel-2:  #141416;
+  --line:     rgba(255,255,255,0.07);
+  --line-2:   rgba(255,255,255,0.13);
+  --ink:      #F5F5F7;
+  --ink-2:    rgba(245,245,247,0.72);
+  --ink-3:    rgba(245,245,247,0.48);
+  --ink-4:    rgba(245,245,247,0.26);
+  --accent:   #E8B75E;
+  --accent-d: rgba(232,183,94,0.18);
+  --good:     #7CC28E;
+  --good-d:   rgba(124,194,142,0.15);
+  --bad:      #E06C5B;
+  --bad-d:    rgba(224,108,91,0.15);
+  --radius:   12px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%; height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ── Deck container ── */
+#deck {
+  position: relative;
+  width: 100vw; height: 100vh;
+}
+
+.slide {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  padding: 5vh 7vw;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 240ms ease;
+  overflow: hidden;
+}
+
+.slide::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right,  rgba(255,255,255,0.016) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.016) 1px, transparent 1px);
+  background-size: 80px 80px;
+  pointer-events: none;
+}
+
+.slide.active {
+  opacity: 1;
+  pointer-events: all;
+}
+
+/* ── Chrome bar ── */
+.chrome {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 2.8vh;
+  flex-shrink: 0;
+}
+.chrome .dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 8px;
+  vertical-align: middle;
+}
+.chrome .num { font-variant-numeric: tabular-nums; }
+
+/* ── Typography ── */
+.eyebrow {
+  font-size: 0.65rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 0.4em;
+}
+.display {
+  font-size: clamp(2.8rem, 5.5vw, 5.2rem);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.h2 {
+  font-size: clamp(1.5rem, 2.8vw, 2.6rem);
+  font-weight: 500;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
+}
+.h3 {
+  font-size: clamp(1.1rem, 1.8vw, 1.6rem);
+  font-weight: 500;
+  color: var(--ink);
+}
+.body {
+  font-size: clamp(0.85rem, 1.2vw, 1.05rem);
+  line-height: 1.65;
+  color: var(--ink-2);
+}
+.caption {
+  font-size: clamp(0.72rem, 0.9vw, 0.82rem);
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+.mono {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-feature-settings: "tnum";
+}
+.accent { color: var(--accent); }
+.good   { color: var(--good); }
+.bad    { color: var(--bad); }
+
+/* ── Layout helpers ── */
+.row { display: flex; flex-direction: row; align-items: center; }
+.col { display: flex; flex-direction: column; }
+.gap-s  { gap: 8px; }
+.gap-m  { gap: 18px; }
+.gap-l  { gap: 28px; }
+.gap-xl { gap: 40px; }
+.flex-1 { flex: 1; min-height: 0; }
+.between { justify-content: space-between; }
+.center  { justify-content: center; align-items: center; }
+.wrap    { flex-wrap: wrap; }
+.grid-2  { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.grid-3  { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+.grid-4  { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 16px; }
+.content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+
+/* ── Card ── */
+.card {
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.card.accent-border { border-color: rgba(232,183,94,0.35); }
+.card.good-border   { border-color: rgba(124,194,142,0.35); }
+.card.bad-border    { border-color: rgba(224,108,91,0.35); }
+
+/* ── Chip ── */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-2);
+}
+.chip.accent { border-color: rgba(232,183,94,0.4); color: var(--accent); background: var(--accent-d); }
+
+/* ── Figure ── */
+.fig {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fig img {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* ── Stat ── */
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stat-val {
+  font-size: clamp(1.6rem, 3vw, 2.6rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+}
+.stat-val.good-v { color: var(--good); }
+.stat-val.bad-v  { color: var(--bad); }
+.stat-label {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ── Divider ── */
+.hline {
+  width: 100%;
+  height: 1px;
+  background: var(--line-2);
+  flex-shrink: 0;
+  margin: 4px 0;
+}
+
+/* ── Sweep underline ── */
+.sweep {
+  position: relative;
+  display: inline-block;
+}
+.sweep::after {
+  content: "";
+  position: absolute;
+  bottom: -3px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+/* ── Bullet list ── */
+.blist {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.blist li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: clamp(0.82rem, 1.1vw, 0.96rem);
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+.blist li::before {
+  content: "—";
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* ── Table ── */
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: clamp(0.78rem, 1vw, 0.9rem);
+}
+.tbl th {
+  text-align: left;
+  padding: 8px 12px;
+  color: var(--ink-3);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--line-2);
+}
+.tbl td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
+}
+.tbl tr:last-child td { border-bottom: none; }
+.tbl .highlight td { color: var(--ink); background: rgba(232,183,94,0.06); }
+
+/* ── Progress bar ── */
+#progress {
+  position: fixed;
+  bottom: 0; left: 0;
+  height: 2px;
+  background: var(--accent);
+  transition: width 240ms ease;
+  z-index: 100;
+}
+
+/* ── Slide counter ── */
+#counter {
+  position: fixed;
+  bottom: 12px; right: 18px;
+  font-size: 0.65rem;
+  font-family: ui-monospace, monospace;
+  color: var(--ink-4);
+  letter-spacing: 0.08em;
+  z-index: 100;
+}
+
+/* ── Help toast ── */
+#help {
+  position: fixed;
+  bottom: 32px; left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 7px 18px;
+  font-size: 0.68rem;
+  color: var(--ink-3);
+  letter-spacing: 0.06em;
+  opacity: 0;
+  transition: opacity 400ms ease;
+  pointer-events: none;
+  z-index: 200;
+}
+#help.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div id="deck">
+
+<!-- ══════════════════════════════════════════════════════════
+     01 · TITLE
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide active" data-n="01 · Title">
+  <div class="chrome">
+    <div><span class="dot"></span>COMP0222 · Coursework 02 · UCL Computer Science</div>
+    <div class="num mono">01 / 15</div>
+  </div>
+  <div class="content center" style="justify-content:center; gap:36px; text-align:center;">
+    <div class="eyebrow">Visual &amp; LiDAR SLAM — Oral Defence</div>
+    <div class="display">Visual &amp; LiDAR SLAM</div>
+    <div class="h3" style="color:var(--ink-2); font-weight:300; max-width:700px;">
+      Own data. Own pipeline. Own <span class="accent">failure modes</span>.
+    </div>
+    <div class="row gap-m wrap center" style="margin-top:16px;">
+      <span class="chip accent">Group 32</span>
+      <span class="chip mono">RealSense D455</span>
+      <span class="chip mono">RPLidar A1</span>
+      <span class="chip mono">ORB-SLAM2</span>
+      <span class="chip mono">COLMAP</span>
+      <span class="chip mono">GTSAM</span>
+    </div>
+    <div class="caption" style="margin-top:24px; color:var(--ink-4);">
+      Muhammad Maaz &amp; Harmish &nbsp;·&nbsp; April 2026
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     02 · OUTLINE
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="02 · Outline">
+  <div class="chrome">
+    <div><span class="dot"></span>Outline · Sensors</div>
+    <div class="num mono">02 / 15</div>
+  </div>
+  <div class="content" style="gap:28px;">
+    <div class="col gap-s">
+      <div class="eyebrow">Ten minutes · two questions defended live</div>
+      <div class="h2 sweep">Q2 and Q3 defended live. Q1 in the report.</div>
+    </div>
+    <div class="grid-3 flex-1" style="gap:22px;">
+      <div class="card accent-border">
+        <div class="row between center"><div class="eyebrow">Q2 · Visual SLAM</div><div class="mono caption accent">33 marks</div></div>
+        <div class="h3" style="font-weight:300; font-size:clamp(1.3rem,2.2vw,2rem);">Monocular<br>ORB-SLAM2</div>
+        <div class="caption">COLMAP intrinsics recovery · EVO Sim(3) alignment · 9 sequences, indoor + outdoor.</div>
+        <div class="mono caption accent" style="margin-top:auto;">5 min</div>
+      </div>
+      <div class="card good-border">
+        <div class="row between center"><div class="eyebrow">Q3 · LiDAR SLAM</div><div class="mono caption good">37 marks</div></div>
+        <div class="h3" style="font-weight:300; font-size:clamp(1.3rem,2.2vw,2rem);">ICP +<br>GTSAM pose-graph</div>
+        <div class="caption">Point-to-plane ICP · loop-closure factor graph · 3 sequences with return-to-origin drift metric.</div>
+        <div class="mono caption good" style="margin-top:auto;">5 min</div>
+      </div>
+      <div class="card" style="opacity:0.5;">
+        <div class="row between center"><div class="eyebrow">Q1 · Report only</div><div class="mono caption">30 marks</div></div>
+        <div class="h3" style="font-weight:300; font-size:clamp(1.3rem,2.2vw,2rem);">Theory &amp;<br>derivations</div>
+        <div class="caption">Sim(3) closed form, ICP Jacobian, GTSAM noise model — cited in report sections 2–4.</div>
+        <div class="caption mono" style="margin-top:auto; color:var(--ink-4);">not defended</div>
+      </div>
+    </div>
+    <div class="hline"></div>
+    <div class="grid-2" style="gap:28px;">
+      <div class="row gap-m center">
+        <div style="flex-shrink:0;">
+          <svg width="48" height="36" viewBox="0 0 48 36" fill="none">
+            <rect x="2" y="6" width="44" height="24" rx="4" stroke="#E8B75E" stroke-width="1.4"/>
+            <circle cx="15" cy="18" r="6" stroke="#E8B75E" stroke-width="1.4"/>
+            <circle cx="15" cy="18" r="2.5" fill="#E8B75E"/>
+            <circle cx="32" cy="18" r="3.5" stroke="#E8B75E" stroke-width="1.4"/>
+            <circle cx="41" cy="18" r="3.5" stroke="#E8B75E" stroke-width="1.4"/>
+            <rect x="8" y="2" width="9" height="4" rx="1" stroke="#E8B75E" stroke-width="1.4"/>
+          </svg>
+        </div>
+        <div class="col gap-s">
+          <div class="eyebrow">RGB-D sensor</div>
+          <div style="font-size:clamp(1rem,1.8vw,1.4rem); font-weight:500;">RealSense D455</div>
+          <div class="caption mono">848 × 480 · 30 Hz · auto-exposure locked</div>
+        </div>
+      </div>
+      <div class="row gap-m center">
+        <div style="flex-shrink:0;">
+          <svg width="48" height="36" viewBox="0 0 48 36" fill="none">
+            <circle cx="24" cy="18" r="12" stroke="#E8B75E" stroke-width="1.4"/>
+            <circle cx="24" cy="18" r="5" stroke="#E8B75E" stroke-width="1.4"/>
+            <line x1="24" y1="1" x2="24" y2="5" stroke="#E8B75E" stroke-width="1.4"/>
+            <line x1="24" y1="31" x2="24" y2="35" stroke="#E8B75E" stroke-width="1.4"/>
+            <line x1="7" y1="18" x2="3" y2="18" stroke="#E8B75E" stroke-width="1.4"/>
+            <line x1="41" y1="18" x2="45" y2="18" stroke="#E8B75E" stroke-width="1.4"/>
+          </svg>
+        </div>
+        <div class="col gap-s">
+          <div class="eyebrow">2D LiDAR</div>
+          <div style="font-size:clamp(1rem,1.8vw,1.4rem); font-weight:500;">RPLidar A1</div>
+          <div class="caption mono">360° · 12 m max range · ~10 Hz</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     03 · Q2 DATA COLLECTION + CALIBRATION
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="03 · Q2 Data &amp; Calibration">
+  <div class="chrome">
+    <div><span class="dot"></span>Q2 · Data Collection &amp; Camera Calibration</div>
+    <div class="num mono">03 / 15</div>
+  </div>
+  <div class="content grid-2" style="gap:24px; flex-direction:row;">
+    <div class="col gap-l flex-1">
+      <div class="card accent-border">
+        <div class="eyebrow">Nine sequences collected</div>
+        <div class="h3">Indoor + outdoor, UCL Marshgate &amp; One Pool Street</div>
+        <ul class="blist" style="margin-top:4px;">
+          <li>Walking pace 0.3–0.5 m/s for stable tracking</li>
+          <li>≥ 30 feature tracks per frame maintained</li>
+          <li>Deliberate loop-back at every turn for COLMAP density</li>
+          <li>Continuous streams, not static captures</li>
+          <li>Blind-spot masked (operator at 135–225°)</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Calibration strategy</div>
+        <div class="h3">COLMAP scratch run — no factory prior</div>
+        <ul class="blist" style="margin-top:4px;">
+          <li>COLMAP SfM on Basement_1 with SIMPLE_RADIAL model</li>
+          <li>f<sub>x</sub> within 0.3–1.6 % of D455 factory values</li>
+          <li>c<sub>x</sub>, c<sub>y</sub> within 2 px — principal point verified</li>
+          <li>Scratch SIMPLE_PINHOLE: f = 383.7 px vs factory 426.7 px</li>
+          <li><span class="accent">10 % deviation explained</span> by single-focal model collapsing f<sub>x</sub> ≠ f<sub>y</sub></li>
+          <li>Intrinsics loaded into ORB-SLAM2 YAML for all sequences</li>
+        </ul>
+      </div>
+    </div>
+    <div class="col gap-m flex-1">
+      <div class="eyebrow">All 9 trajectories (ORB-SLAM2)</div>
+      <div class="fig flex-1">
+        <img src="coursework_deliverables/data/q2_results/q2a_all_trajectories.png"
+             alt="Q2a all trajectories">
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     04 · Q2 PIPELINE DIAGRAM
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="04 · Q2 Pipeline">
+  <div class="chrome">
+    <div><span class="dot"></span>Q2 · Full Pipeline on a Single Slide</div>
+    <div class="num mono">04 / 15</div>
+  </div>
+  <div class="content" style="gap:24px;">
+    <div class="col gap-s">
+      <div class="h2">Video → COLMAP → K → ORB-SLAM2 → EVO</div>
+      <div class="body" style="color:var(--ink-3);">Each step verified independently; the EVO arm only ever touches the output trajectories.</div>
+    </div>
+    <!-- Pipeline flow -->
+    <div class="row gap-m center flex-1" style="justify-content:stretch;">
+      <div class="card accent-border col gap-s" style="flex:1; text-align:center;">
+        <div class="eyebrow">Input</div>
+        <div class="h3 accent">D455 stream</div>
+        <div class="caption">848 × 480 · 30 Hz</div>
+      </div>
+      <div class="accent" style="font-size:2rem;">→</div>
+      <div class="card col gap-s" style="flex:1.3; text-align:center;">
+        <div class="eyebrow">Offline SfM</div>
+        <div class="h3">COLMAP</div>
+        <div class="caption">Sequential SfM · SIMPLE_RADIAL</div>
+        <div class="caption mono accent">→ K, ref poses, sparse cloud</div>
+      </div>
+      <div class="accent" style="font-size:2rem;">→</div>
+      <div class="card good-border col gap-s" style="flex:1.3; text-align:center;">
+        <div class="eyebrow">Online SLAM</div>
+        <div class="h3">ORB-SLAM2</div>
+        <div class="caption">Monocular · COLMAP intrinsics</div>
+        <div class="caption mono good">→ keyframe trajectory</div>
+      </div>
+      <div class="accent" style="font-size:2rem;">→</div>
+      <div class="card col gap-s" style="flex:1.3; text-align:center;">
+        <div class="eyebrow">Evaluation</div>
+        <div class="h3">EVO APE</div>
+        <div class="caption">Sim(3) Umeyama · correct_scale</div>
+        <div class="caption mono">→ ATE, RPE, plots</div>
+      </div>
+    </div>
+    <div class="hline"></div>
+    <div class="grid-3" style="gap:18px;">
+      <div class="card">
+        <div class="eyebrow">Why COLMAP for K?</div>
+        <div class="body">D455 vendor spec f<sub>x</sub> = 426.7 px. COLMAP recovers f ≈ 421–428 px. Without this step, bundle-adjustment residuals accumulate heading drift proportional to the intrinsic error.</div>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Why correct_scale?</div>
+        <div class="body">Monocular SLAM has a scale degree of freedom. Umeyama Sim(3) alignment recovers the global scale factor so ATE measures geometric agreement, not scale mismatch.</div>
+      </div>
+      <div class="card">
+        <div class="eyebrow">No external GT</div>
+        <div class="body">COLMAP SfM trajectory is used as a pseudo-ground-truth. ATE is therefore an <em>inter-method disagreement</em> metric, not absolute accuracy. Named explicitly in all figures.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     05 · COLMAP vs ORB-SLAM2 VISUAL
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="05 · COLMAP vs ORB-SLAM2">
+  <div class="chrome">
+    <div><span class="dot"></span>Q2b · COLMAP vs ORB-SLAM2 — Same Scene, Two Reconstructions</div>
+    <div class="num mono">05 / 15</div>
+  </div>
+  <div class="content" style="gap:20px;">
+    <div class="h2">Same intrinsics, same video — different front-ends, compared with EVO</div>
+    <div class="row gap-m flex-1" style="min-height:0;">
+      <div class="col gap-s flex-1" style="min-width:0;">
+        <div class="eyebrow">Trajectory overlays (Umeyama aligned)</div>
+        <div class="fig flex-1">
+          <img src="coursework_deliverables/data/q2_results/q2b_colmap_vs_orbslam.png"
+               alt="COLMAP vs ORB-SLAM2">
+        </div>
+      </div>
+      <div class="col gap-m" style="width:32%; flex-shrink:0;">
+        <div class="eyebrow">3D sparse reconstruction — COLMAP</div>
+        <div class="fig" style="flex:1; min-height:0;">
+          <img src="coursework_deliverables/data/q2_results/q2_visual_overview.png"
+               alt="Visual overview">
+        </div>
+        <div class="card">
+          <div class="eyebrow">Floor7_Hallway — COLMAP near-fail</div>
+          <div class="caption">Only <span class="bad">8 poses</span> reconstructed — featureless repetitive corridor. Excluded from EVO comparison. ORB-SLAM2 still tracked 617 keyframes.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     06 · Q2 EVO RESULTS
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="06 · Q2 EVO Results">
+  <div class="chrome">
+    <div><span class="dot"></span>Q2b · EVO Absolute Trajectory Error — Inter-method Disagreement</div>
+    <div class="num mono">06 / 15</div>
+  </div>
+  <div class="content grid-2" style="gap:24px; flex-direction:row;">
+    <div class="col gap-m flex-1">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Sequence</th>
+            <th>ATE RMSE</th>
+            <th>ORB poses</th>
+            <th>COLMAP poses</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="highlight">
+            <td class="mono">Basement_1</td>
+            <td class="accent">0.036 m</td>
+            <td>869</td>
+            <td>284</td>
+            <td class="good">Excellent agreement</td>
+          </tr>
+          <tr class="highlight">
+            <td class="mono">Outdoor_1</td>
+            <td class="accent">0.262 m</td>
+            <td>983</td>
+            <td>—</td>
+            <td>Acceptable, open space</td>
+          </tr>
+          <tr>
+            <td class="mono">OnePoolStreet1</td>
+            <td class="bad">~3.0 m</td>
+            <td>5759</td>
+            <td>—</td>
+            <td class="bad">Scale collapse</td>
+          </tr>
+          <tr>
+            <td class="mono">Entrance2</td>
+            <td class="bad">rot ≈ 178°</td>
+            <td>—</td>
+            <td>—</td>
+            <td class="bad">Chirality flip</td>
+          </tr>
+          <tr>
+            <td class="mono">Floor7_Hallway</td>
+            <td style="color:var(--ink-4);">N/A</td>
+            <td>617</td>
+            <td>8</td>
+            <td class="bad">COLMAP near-fail</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="hline"></div>
+      <div class="grid-2" style="gap:14px;">
+        <div class="stat">
+          <div class="stat-val">0.036 m</div>
+          <div class="stat-label">Best (Basement_1)</div>
+        </div>
+        <div class="stat">
+          <div class="stat-val good-v">1 %</div>
+          <div class="stat-label">Drift indoor (typical)</div>
+        </div>
+        <div class="stat">
+          <div class="stat-val bad-v">178°</div>
+          <div class="stat-label">Entrance2 rotation error</div>
+        </div>
+        <div class="stat">
+          <div class="stat-val">9</div>
+          <div class="stat-label">Sequences captured</div>
+        </div>
+      </div>
+    </div>
+    <div class="col gap-m flex-1">
+      <div class="eyebrow">Calibration cross-check</div>
+      <div class="fig" style="flex:1; min-height:0;">
+        <img src="coursework_deliverables/data/q2_results/q2a_calibration_report.png"
+             alt="Calibration report">
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     07 · ORB-SLAM2 FAILURE MODES
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="07 · ORB-SLAM2 Failure Modes">
+  <div class="chrome">
+    <div><span class="dot"></span>Q2 · Three Ways Monocular ORB-SLAM2 Breaks</div>
+    <div class="num mono">07 / 15</div>
+  </div>
+  <div class="content" style="gap:22px;">
+    <div class="h2">Three failure modes, all observed in our sequences</div>
+    <div class="grid-3 flex-1" style="gap:22px;">
+      <div class="card bad-border col gap-m">
+        <div class="eyebrow" style="color:var(--bad);">Failure mode 1</div>
+        <div class="h3">Pure-rotation kills triangulation</div>
+        <div class="caption">No baseline → no parallax → no new map points. Tracking drops to motion-model prior. Seen in BikeStorage2 turning sequences.</div>
+        <div class="hline"></div>
+        <div class="caption mono">Mitigation: maintain translational motion; avoid in-place pivots</div>
+      </div>
+      <div class="card bad-border col gap-m">
+        <div class="eyebrow" style="color:var(--bad);">Failure mode 2</div>
+        <div class="h3">Featureless walls starve the matcher</div>
+        <div class="caption">Fewer than ~50 ORB inliers → tracking failure. Floor7_Hallway corridor: concrete walls, uniform ceiling. KITTI07 at feat &lt; 1000: RANSAC inlier count never reaches the hardcoded 100-point threshold.</div>
+        <div class="hline"></div>
+        <div class="caption mono">Mitigation: ensure textured scene or increase features</div>
+      </div>
+      <div class="card bad-border col gap-m">
+        <div class="eyebrow" style="color:var(--bad);">Failure mode 3</div>
+        <div class="h3">Sim(3) scale collapse → 178° flip</div>
+        <div class="caption">Umeyama alignment fits a near-zero scale factor when the trajectory is very short relative to scene depth. The rotation component absorbs this as a 180° flip. OnePoolStreet1 and Entrance2 are both scale-collapse artefacts, not real heading errors.</div>
+        <div class="hline"></div>
+        <div class="caption mono">Mitigation: longer sequences with varied depth</div>
+      </div>
+    </div>
+    <div class="fig" style="height:28%;">
+      <img src="coursework_deliverables/data/q2_results/q2c_statistics.png" alt="Q2c statistics">
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     08 · Q2 TAKEAWAYS
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="08 · Q2 Takeaways">
+  <div class="chrome">
+    <div><span class="dot"></span>Q2 · Three Takeaways</div>
+    <div class="num mono">08 / 15</div>
+  </div>
+  <div class="content center" style="justify-content:center; gap:32px;">
+    <div class="h2">Q2 in three lines</div>
+    <div class="col gap-l" style="max-width:860px; width:100%;">
+      <div class="card accent-border row gap-l">
+        <div class="stat-val" style="font-size:3rem; flex-shrink:0;">1</div>
+        <div class="col gap-s">
+          <div class="h3">You cannot skip COLMAP intrinsic recovery</div>
+          <div class="body">D455 vendor f differs up to 10 % from what COLMAP recovers from the actual data. That propagates into drift. Always calibrate from your data, not the spec sheet.</div>
+        </div>
+      </div>
+      <div class="card good-border row gap-l">
+        <div class="stat-val good-v" style="font-size:3rem; flex-shrink:0;">2</div>
+        <div class="col gap-s">
+          <div class="h3">Monocular ORB-SLAM2 gives ~1 % drift indoors</div>
+          <div class="body">Basement_1: 0.036 m / ~3.6 m tracked path. Outdoor degrades 7× — open space means less structured depth, more scale ambiguity in the monocular model.</div>
+        </div>
+      </div>
+      <div class="card row gap-l">
+        <div class="stat-val bad-v" style="font-size:3rem; flex-shrink:0;">3</div>
+        <div class="col gap-s">
+          <div class="h3">Rotation ATE is a diagnostic, not a failure mode</div>
+          <div class="body">A 178° rotation error means scale collapsed and Umeyama flipped the trajectory — not a real heading failure. Spotting this saved us from reporting OnePoolStreet1 as a valid result.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     09 · Q3 SEQUENCES
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="09 · Q3 Sequences">
+  <div class="chrome">
+    <div><span class="dot"></span>Q3 · LiDAR Sequences — Two Closed Loops per Environment</div>
+    <div class="num mono">09 / 15</div>
+  </div>
+  <div class="content" style="gap:22px;">
+    <div class="col gap-s">
+      <div class="h2">Three sequences. Two loops each. One drift metric.</div>
+      <div class="body" style="color:var(--ink-3);">Without ground-truth, we use <span class="accent">closure error</span> — Euclidean distance from end-pose back to start-pose — as our drift measure. Two loops means we pass the start twice, proving tracking is maintained.</div>
+    </div>
+    <div class="grid-3 flex-1" style="gap:22px;">
+      <div class="card accent-border col gap-m">
+        <div class="row between center">
+          <div class="eyebrow">Sequence 1</div>
+          <span class="chip">Indoor · Large</span>
+        </div>
+        <div class="h3">Floor7_Hallway</div>
+        <div class="caption">Marshgate Building, Floor 7. Long featureless corridor — hardest for both LiDAR and visual SLAM. Satisfies brief requirement: "one large indoor area."</div>
+        <div class="fig flex-1">
+          <img src="coursework_deliverables/data/q3_results/q3a_two_loop_floor7_hallway.png" alt="Floor7 two-loop">
+        </div>
+      </div>
+      <div class="card col gap-m">
+        <div class="row between center">
+          <div class="eyebrow">Sequence 2</div>
+          <span class="chip">Indoor · Structured</span>
+        </div>
+        <div class="h3">Basement_1</div>
+        <div class="caption">Basement corridor with clear wall geometry. Best ICP convergence of the three sequences due to high surface density from nearby parallel walls.</div>
+        <div class="fig flex-1">
+          <img src="coursework_deliverables/data/q3_results/q3a_two_loop_basement_1.png" alt="Basement_1 two-loop">
+        </div>
+      </div>
+      <div class="card col gap-m">
+        <div class="row between center">
+          <div class="eyebrow">Sequence 3</div>
+          <span class="chip">Outdoor</span>
+        </div>
+        <div class="h3">Outdoor_1</div>
+        <div class="caption">Open courtyard. Sparse surface contacts cause ICP to diverge more frequently — only 47 % scan utilisation. Heading proof is less reliable outdoors.</div>
+        <div class="fig flex-1">
+          <img src="coursework_deliverables/data/q3_results/q3a_two_loop_outdoor_1.png" alt="Outdoor_1 two-loop">
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     10 · Q3 PIPELINE
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="10 · Q3 Pipeline">
+  <div class="chrome">
+    <div><span class="dot"></span>Q3 · Full LiDAR SLAM Pipeline</div>
+    <div class="num mono">10 / 15</div>
+  </div>
+  <div class="content" style="gap:20px;">
+    <div class="h2">Scan → ICP odometry → loop closure → GTSAM PGO → occupancy grid</div>
+    <!-- Pipeline row -->
+    <div class="row gap-m" style="flex-shrink:0;">
+      <div class="card col gap-s" style="flex:1; text-align:center;">
+        <div class="eyebrow">Front-end</div>
+        <div class="h3 accent">Point-to-plane ICP</div>
+        <div class="caption">Huber M-estimator (δ=0.3 m) · 20-KF local map · ICP Hessian per edge</div>
+      </div>
+      <div class="accent" style="font-size:2rem;">→</div>
+      <div class="card col gap-s" style="flex:1; text-align:center;">
+        <div class="eyebrow">Loop detector</div>
+        <div class="h3">4-gate pipeline</div>
+        <div class="caption">Temporal · arc-length · pose dist &lt; 2 m · ICP score ≥ 0.70</div>
+      </div>
+      <div class="accent" style="font-size:2rem;">→</div>
+      <div class="card good-border col gap-s" style="flex:1; text-align:center;">
+        <div class="eyebrow">Back-end</div>
+        <div class="h3 good">GTSAM LM Pose2</div>
+        <div class="caption">Per-edge 3×3 info from ICP Hessian · SciPy SLSQP fallback</div>
+      </div>
+      <div class="accent" style="font-size:2rem;">→</div>
+      <div class="card col gap-s" style="flex:1; text-align:center;">
+        <div class="eyebrow">Output</div>
+        <div class="h3">Occupancy grid</div>
+        <div class="caption">Log-odds Bresenham ray-casting · 5 cm/cell · unbounded</div>
+      </div>
+    </div>
+    <div class="hline"></div>
+    <div class="grid-4 flex-1" style="gap:16px;">
+      <div class="card">
+        <div class="eyebrow">Pre-processing</div>
+        <ul class="blist">
+          <li>Quality filter q &lt; 5 dropped</li>
+          <li>Blind spot 135–225° masked</li>
+          <li>Max range 12 000 mm (sensor max)</li>
+          <li>Voxel grid 0.05 m (best ablation value)</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="eyebrow">ICP keyframes</div>
+        <ul class="blist">
+          <li>Keyframe every ≥ 0.3 m or ≥ 5°</li>
+          <li>Reject if translation &gt; 0.5 m</li>
+          <li>Reject if rotation &gt; 25°</li>
+          <li>Local map: last 20 keyframes</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Loop gates (in order)</div>
+        <ul class="blist">
+          <li>Temporal: j−i ≥ 10 KF</li>
+          <li>Arc: min(8 m, 0.4 × total arc)</li>
+          <li>Pose dist &lt; 2.0 m</li>
+          <li>ICP score ≥ 0.70</li>
+          <li>NMS window = 15 KF</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="eyebrow">GTSAM factors</div>
+        <ul class="blist">
+          <li>Odometry: ICP Hessian info</li>
+          <li>Loop: σ<sub>xy</sub>=2 cm, σ<sub>θ</sub>=0.01 rad</li>
+          <li>Prior on pose 0 (gauge fix)</li>
+          <li>Levenberg-Marquardt solver</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     11 · Q3b PARAMETERS
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="11 · Q3b Parameters">
+  <div class="chrome">
+    <div><span class="dot"></span>Q3b · Parameter Sensitivity — Basement_1</div>
+    <div class="num mono">11 / 15</div>
+  </div>
+  <div class="content grid-2" style="gap:22px; flex-direction:row;">
+    <div class="col gap-m flex-1">
+      <div class="eyebrow">Ablation: 4 parameters swept independently</div>
+      <div class="fig flex-1">
+        <img src="coursework_deliverables/data/q3_results/q3b_basement_1.png" alt="Q3b parameter analysis">
+      </div>
+    </div>
+    <div class="col gap-m" style="width:34%; flex-shrink:0;">
+      <div class="card accent-border">
+        <div class="eyebrow">Headline finding</div>
+        <div class="h3">Sensor max range is the #1 factor</div>
+        <div class="caption">Max range 2 000 mm → <span class="bad">2.018 m closure</span><br>Max range 12 000 mm → <span class="good">0.161 m closure</span><br><span class="accent">12.5× difference</span> from a single parameter.</div>
+      </div>
+      <table class="tbl">
+        <thead>
+          <tr><th>Parameter</th><th>Best value</th><th>Worst</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Max range</td><td class="good">12 000 mm</td><td class="bad">2 000 mm</td></tr>
+          <tr><td>Angular res.</td><td class="good">Full scan</td><td class="bad">Every 3rd</td></tr>
+          <tr><td>Voxel size</td><td class="good">0.05 m</td><td class="bad">0.20 m</td></tr>
+          <tr><td>Scan rate</td><td class="good">100 %</td><td class="bad">33 %</td></tr>
+        </tbody>
+      </table>
+      <div class="card">
+        <div class="eyebrow">Why voxel 0.05 m beats none</div>
+        <div class="caption">Voxel ≥ 0.10 m blurs surface normals below reliable PCA estimation — ICP's point-to-plane residual degrades. 0.05 m preserves detail while reducing search cost.</div>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Why 33 % scan rate fails</div>
+        <div class="caption">Per-step motion grows beyond ICP convergence basin (typically ~0.3 m). Slower acquisition rate means larger motion between consecutive scans.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     12 · Q3c LOOP CLOSURE
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="12 · Q3c Loop Closure">
+  <div class="chrome">
+    <div><span class="dot"></span>Q3c · Loop Closure Detection</div>
+    <div class="num mono">12 / 15</div>
+  </div>
+  <div class="content grid-2" style="gap:22px; flex-direction:row;">
+    <div class="col gap-m flex-1">
+      <div class="eyebrow">ICP score histograms — rejected vs accepted candidates</div>
+      <div class="fig flex-1">
+        <img src="coursework_deliverables/data/q3_results/q3c_basement_1.png" alt="Q3c loop closure">
+      </div>
+    </div>
+    <div class="col gap-m" style="width:34%; flex-shrink:0;">
+      <div class="card accent-border col gap-s">
+        <div class="eyebrow">Four gates (all must pass)</div>
+        <div class="col gap-s" style="margin-top:4px;">
+          <div class="row gap-s"><span class="mono accent">1.</span><span class="caption">Temporal: j−i ≥ 10 keyframes</span></div>
+          <div class="row gap-s"><span class="mono accent">2.</span><span class="caption">Arc-length: ≥ min(8 m, 40 % total arc)</span></div>
+          <div class="row gap-s"><span class="mono accent">3.</span><span class="caption">Pose distance &lt; 2.0 m</span></div>
+          <div class="row gap-s"><span class="mono accent">4.</span><span class="caption">ICP match score ≥ <strong style="color:var(--accent)">0.70</strong></span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Threshold 0.70 — empirical basis</div>
+        <div class="caption">Observed across all 3 sequences:<br>
+          False matches (sliding-window): <span class="bad">0.45–0.60</span><br>
+          Confirmed revisits: <span class="good">0.75–0.95</span><br>
+          0.15-wide gap → zero false positives at 0.70.
+        </div>
+      </div>
+      <div class="card good-border">
+        <div class="eyebrow">NMS + hysteresis</div>
+        <div class="caption">One physical revisit triggers 10–20 candidate matches. 2D NMS (window = 15 KF in both i and j) collapses to one factor per loop — avoids over-constraining the pose graph.</div>
+      </div>
+      <div class="grid-2" style="gap:12px;">
+        <div class="stat">
+          <div class="stat-val good-v">0</div>
+          <div class="stat-label">False positives</div>
+        </div>
+        <div class="stat">
+          <div class="stat-val">0.70</div>
+          <div class="stat-label">ICP threshold</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     13 · Q3d PGO
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="13 · Q3d PGO">
+  <div class="chrome">
+    <div><span class="dot"></span>Q3d · Factor Graph Optimisation — Before vs After</div>
+    <div class="num mono">13 / 15</div>
+  </div>
+  <div class="content" style="gap:18px;">
+    <div class="row gap-l" style="flex-shrink:0; align-items:flex-start;">
+      <div class="col gap-s flex-1">
+        <div class="h2">GTSAM LM Pose2 back-end</div>
+        <div class="body" style="color:var(--ink-3);">Per-edge information matrices from ICP Hessian. Loop edges tighter (σ<sub>xy</sub>=2 cm) than odometry edges. Anchor prior fixes gauge.</div>
+      </div>
+      <div class="card bad-border col gap-s" style="max-width:360px; flex-shrink:0;">
+        <div class="eyebrow" style="color:var(--bad);">⚠ Basement_1 — PGO degraded</div>
+        <div class="caption">Before: <span class="accent">0.194 m</span> → After: <span class="bad">0.239 m</span> (+23 %)<br>GTSAM LM hit lambda limit (no convergence). Loop-closure ICP transform marginally inconsistent with odometry geometry. Odometry-only estimate was already near-optimal — adding a conflicting loop constraint worsened it.</div>
+      </div>
+    </div>
+    <div class="row gap-m flex-1" style="min-height:0;">
+      <div class="col gap-s flex-1">
+        <div class="eyebrow">Trajectory before / after — Basement_1</div>
+        <div class="fig flex-1">
+          <img src="coursework_deliverables/data/q3_results/q3d_basement_1.png" alt="Q3d Basement_1">
+        </div>
+      </div>
+      <div class="col gap-s flex-1">
+        <div class="eyebrow">Occupancy grid before / after — Basement_1</div>
+        <div class="fig flex-1">
+          <img src="coursework_deliverables/data/q3_results/q3d_grid_basement_1.png" alt="Q3d grid Basement_1">
+        </div>
+      </div>
+      <div class="col gap-s" style="width:24%; flex-shrink:0;">
+        <div class="eyebrow">Floor7_Hallway</div>
+        <div class="fig" style="flex:1; min-height:0;">
+          <img src="coursework_deliverables/data/q3_results/q3d_floor7_hallway.png" alt="Q3d Floor7">
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     14 · Q3 OCCUPANCY MAPS
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="14 · Occupancy Maps">
+  <div class="chrome">
+    <div><span class="dot"></span>Q3 · Final Occupancy Grid Maps</div>
+    <div class="num mono">14 / 15</div>
+  </div>
+  <div class="content" style="gap:18px;">
+    <div class="h2">Log-odds Bresenham maps — three environments</div>
+    <div class="grid-3 flex-1" style="gap:18px;">
+      <div class="col gap-s">
+        <div class="eyebrow">Floor7_Hallway — large indoor</div>
+        <div class="fig flex-1">
+          <img src="coursework_deliverables/data/q3_results/occupancy_floor7_hallway.png" alt="Floor7 occupancy">
+        </div>
+        <div class="caption">Long corridor with side rooms. Heading drift visible at far end — expected without loop closure on a featureless environment.</div>
+      </div>
+      <div class="col gap-s">
+        <div class="eyebrow">Basement_1 — indoor structured</div>
+        <div class="fig flex-1">
+          <img src="coursework_deliverables/data/q3_results/occupancy_basement_1.png" alt="Basement occupancy">
+        </div>
+        <div class="caption">Cleanest map — high surface density from parallel corridor walls provides strong ICP correspondences. Closure error 0.194 m.</div>
+      </div>
+      <div class="col gap-s">
+        <div class="eyebrow">Outdoor_1 — open space</div>
+        <div class="fig flex-1">
+          <img src="coursework_deliverables/data/q3_results/occupancy_outdoor_1.png" alt="Outdoor occupancy">
+        </div>
+        <div class="caption">Sparse surface contacts: only 47 % scan utilisation. ICP diverges in open space — expected degradation for a 2D LiDAR outdoors.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ══════════════════════════════════════════════════════════
+     15 · CONCLUSION
+     ══════════════════════════════════════════════════════════ -->
+<section class="slide" data-n="15 · Conclusion">
+  <div class="chrome">
+    <div><span class="dot"></span>Conclusion · Happy to go deeper on any of it</div>
+    <div class="num mono">15 / 15</div>
+  </div>
+  <div class="content" style="gap:26px;">
+    <div class="h2">Five things we'd defend under pressure</div>
+    <div class="grid-2 flex-1" style="gap:20px;">
+      <div class="col gap-l">
+        <div class="card accent-border row gap-m">
+          <div class="stat-val" style="font-size:2.4rem; flex-shrink:0; min-width:2.5rem;">1</div>
+          <div class="col gap-s"><div class="h3">Loop closure is load-bearing</div><div class="caption">KITTI07 ATE: 4.39 m (baseline) → 18 m (no loop). 311 % increase. ORB-SLAM2's Essential Graph correction is the primary drift bound on long loops.</div></div>
+        </div>
+        <div class="card good-border row gap-m">
+          <div class="stat-val good-v" style="font-size:2.4rem; flex-shrink:0; min-width:2.5rem;">2</div>
+          <div class="col gap-s"><div class="h3">Sensor max range is #1 LiDAR parameter</div><div class="caption">2 000 mm vs 12 000 mm: 12.5× closure error difference. Truncating range removes the far-wall correspondences ICP needs to converge.</div></div>
+        </div>
+        <div class="card row gap-m">
+          <div class="stat-val" style="font-size:2.4rem; flex-shrink:0; min-width:2.5rem;">3</div>
+          <div class="col gap-s"><div class="h3">Feature count is non-monotonic</div><div class="caption">TUM feat=500 ATE (0.015 m) looks better than baseline (0.032 m), but only 45 % of frames tracked — easy early segment bias. ATE over tracked frames ≠ global accuracy.</div></div>
+        </div>
+      </div>
+      <div class="col gap-l">
+        <div class="card row gap-m">
+          <div class="stat-val bad-v" style="font-size:2.4rem; flex-shrink:0; min-width:2.5rem;">4</div>
+          <div class="col gap-s"><div class="h3">PGO can degrade when loops are marginal</div><div class="caption">Basement_1: 0.194 m → 0.239 m after PGO. GTSAM LM hit lambda limit — one loop factor with a slightly mis-estimated transform conflicted with tight odometry. This is a valid scientific result.</div></div>
+        </div>
+        <div class="card row gap-m">
+          <div class="stat-val" style="font-size:2.4rem; flex-shrink:0; min-width:2.5rem;">5</div>
+          <div class="col gap-s"><div class="h3">Both systems degrade the same way</div><div class="caption">Featureless environments break visual SLAM (no texture) and LiDAR SLAM (no surface normals) for exactly the same geometric reason — insufficient discriminative structure for correspondence matching.</div></div>
+        </div>
+        <div class="card accent-border col gap-s" style="margin-top:auto;">
+          <div class="eyebrow">Open for questions</div>
+          <div class="caption">Sim(3) closed form derivation · ICP Jacobian · GTSAM noise model selection · loop-closure false-positive analysis · log-odds tuning · COLMAP sequential vs incremental SfM</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</div><!-- #deck -->
+
+<div id="progress"></div>
+<div id="counter">01 / 15</div>
+<div id="help">← → Space to navigate · F for fullscreen</div>
+
+<script>
+(function() {
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total  = slides.length;
+  let   cur    = 0;
+
+  const progress = document.getElementById('progress');
+  const counter  = document.getElementById('counter');
+  const helpEl   = document.getElementById('help');
+
+  function pad(n) { return String(n).padStart(2,'0'); }
+
+  function go(n) {
+    slides[cur].classList.remove('active');
+    cur = ((n % total) + total) % total;
+    slides[cur].classList.add('active');
+    const pct = (cur / (total - 1)) * 100;
+    progress.style.width = pct + '%';
+    counter.textContent  = pad(cur + 1) + ' / ' + pad(total);
+  }
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') {
+      e.preventDefault(); go(cur + 1);
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault(); go(cur - 1);
+    } else if (e.key === 'Home') {
+      go(0);
+    } else if (e.key === 'End') {
+      go(total - 1);
+    } else if (e.key === 'f' || e.key === 'F') {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
+  });
+
+  // Click right half to advance, left half to go back
+  document.getElementById('deck').addEventListener('click', function(e) {
+    if (e.clientX > window.innerWidth / 2) go(cur + 1);
+    else go(cur - 1);
+  });
+
+  // Touch swipe
+  let tx = 0;
+  document.addEventListener('touchstart', function(e) { tx = e.touches[0].clientX; }, {passive:true});
+  document.addEventListener('touchend',   function(e) {
+    const dx = e.changedTouches[0].clientX - tx;
+    if (Math.abs(dx) > 40) go(dx < 0 ? cur + 1 : cur - 1);
+  }, {passive:true});
+
+  // Show help on load, hide after 3s
+  setTimeout(function() { helpEl.classList.add('show'); }, 600);
+  setTimeout(function() { helpEl.classList.remove('show'); }, 3600);
+
+  // Initialise progress bar
+  go(0);
+})();
+</script>
+</body>
+</html>
