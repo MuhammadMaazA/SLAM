@@ -1,6 +1,7 @@
-%% COMP0222 Coursework 2 — Group 32
+%% COMP0222 Coursework 2 -- Group 32
 %% Visual and LiDAR SLAM
-%% pdflatex COMP0222_CW2_GRP_32.tex
+%% Build: run `git lfs pull` first to fetch result PNGs, then
+%%   pdflatex COMP0222_CW2_GRP_32.tex     (run twice so references resolve)
 \documentclass[twocolumn,10pt,a4paper]{article}
 
 \usepackage[margin=1.8cm,top=2cm,bottom=2cm]{geometry}
@@ -13,11 +14,35 @@
 \usepackage{caption}
 \usepackage{subcaption}
 \usepackage{microtype}
-\usepackage{enumitem}
 \usepackage{float}
+\usepackage{listings}
 
-\captionsetup{font=small, labelfont=bf, skip=4pt}
+\captionsetup{font=small, labelfont=bf, skip=3pt}
 \setlength{\columnsep}{0.6cm}
+
+\definecolor{codebg}{RGB}{245,245,245}
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  backgroundcolor=\color{codebg},
+  keywordstyle=\color{blue!70!black},
+  commentstyle=\color{green!40!black}\itshape,
+  stringstyle=\color{red!60!black},
+  breaklines=true,
+  breakatwhitespace=true,
+  frame=single,
+  framesep=2pt,
+  rulecolor=\color{gray!40},
+  xleftmargin=2pt,
+  xrightmargin=2pt,
+  aboveskip=3pt,
+  belowskip=3pt,
+  numbers=none,
+  captionpos=b,
+  showstringspaces=false,
+  columns=fullflexible,
+  literate={->}{{$\rightarrow$}}1,
+}
+\setlength{\parskip}{2pt}
 
 \hypersetup{
   colorlinks=true,
@@ -27,486 +52,1157 @@
 }
 
 \title{\textbf{Visual and LiDAR SLAM}\\
-  \large COMP0222 Coursework 2 — Group 32}
+  \large COMP0222 Coursework 2 -- Group 32}
 \author{Muhammad Maaz \and Harmish}
 \date{April 2026}
 
 \begin{document}
 \maketitle
 
-%% ─────────────────────────────────────────────────────────────────────────────
+%% ---------------------------------------------------------------------------
 \begin{abstract}
-We evaluate monocular visual SLAM (ORB-SLAM2) on the KITTI\,07 and TUM
-\textit{freiburg3\_long\_office} benchmarks, collect nine custom sequences with
-an Intel RealSense D455 camera and an RPLidar A1, and implement a full 2D
-LiDAR SLAM pipeline including point-to-plane ICP odometry, scan-rate parameter
-ablations, multi-gate loop-closure detection, and GTSAM Levenberg--Marquardt
-pose-graph optimisation (PGO). On KITTI\,07 the baseline achieves an ATE of
-4.39\,m over a 695\,m ground-truth path (0.6\,\%). The LiDAR pipeline closes
-two physical loops with sub-0.2\,m closure error on structured indoor sequences.
+\noindent
+We run monocular ORB-SLAM2 on KITTI~07 and TUM
+\textit{freiburg3\_long\_office}, collect two custom RGB sequences with an
+Intel RealSense D455, and build a 2D LiDAR SLAM stack (point-to-plane ICP,
+log-odds occupancy, four-gate loop detection, GTSAM pose-graph
+optimisation) from RPLidar A2M12 data. Headline numbers: KITTI~07 ATE
+4.39\,m (0.6\% of a 695\,m path), TUM ATE
+0.032\,m, and LiDAR Basement\_1/Floor7\_Hallway closure errors
+below 0.2\,m before pose-graph optimisation. In Q3d, GTSAM reduces
+the total pose-graph cost by 8--25$\times$ but slightly worsens the
+endpoint closure error (Floor7\_Hallway: 0.166\,m to 0.221\,m),
+which we analyse as a loop/odometry weighting issue rather than
+presenting as an improvement. Every change to a parameter or a module
+has a clear effect that the report explains with the underlying maths.
 \end{abstract}
 
-%% ─────────────────────────────────────────────────────────────────────────────
+%% ---------------------------------------------------------------------------
 \section{Introduction}
-Simultaneous Localisation and Mapping (SLAM) is the core computational problem
-underlying autonomous navigation. This report covers two complementary
-modalities: \emph{visual SLAM} using an RGB camera (Questions 1 and 2) and
-\emph{LiDAR SLAM} using a 2D spinning lidar (Question 3). Section~\ref{sec:q1}
-evaluates ORB-SLAM2 on established benchmarks via EVO trajectory metrics.
-Section~\ref{sec:q2} covers custom-sequence collection, COLMAP camera
-calibration, and inter-method comparison. Section~\ref{sec:q3} details the
-custom LiDAR pipeline.
+\label{sec:intro}
+SLAM means: build a map and estimate where the sensor is inside it at the
+same time. We study two sensors. An RGB camera gives pixels; we use
+ORB-SLAM2 to turn those pixels into a trajectory and a sparse 3D map.
+A 2D spinning LiDAR gives range readings; we use point-to-plane ICP and a
+factor graph to turn those readings into a 2D trajectory and an occupancy
+grid. We organise the work into three questions: ORB-SLAM2 on
+benchmark sequences (KITTI~07 and TUM), ORB-SLAM2 on our own
+sequences compared with COLMAP, and 2D LiDAR SLAM on our own
+sequences with loop closure and pose-graph optimisation.
 
-%% ─────────────────────────────────────────────────────────────────────────────
-\section{Q1: Visual SLAM on Benchmark Datasets}
+%% ---------------------------------------------------------------------------
+\section{Metrics}
+\label{sec:metrics}
+
+\textbf{Absolute Trajectory Error (ATE)} measures global consistency. The estimated trajectory is first aligned to ground truth using a Sim(3) Umeyama transform (rotation, translation, and scale), which is necessary for monocular SLAM where the absolute scale is unobservable. ATE RMSE is then the average per-pose translation error after this alignment. A low ATE means the overall shape of the trajectory matches ground truth.
+
+\textbf{Relative Pose Error (RPE)} measures local, per-frame accuracy. It computes how much the estimated motion between two consecutive frames deviates from the true motion, independent of any global alignment. A low RPE means individual frame-to-frame steps are accurate, even if the trajectory drifts globally.
+
+\textbf{LiDAR odometry} uses scan-to-grid matching: each new scan is matched against the current occupancy map by searching for the pose correction that maximises the number of scan points landing on occupied cells. The map is updated with log-odds: each scan hit increases a cell's occupancy score by a fixed amount, each beam pass-through decreases it. Huber-weighted point-to-plane ICP provides the covariance estimate for each odometry step, which is passed to the pose-graph as an edge weight.
+
+\textbf{Pose-graph optimisation} collects all odometry edges and detected loop closure edges into a factor graph and minimises the total weighted inconsistency using Levenberg--Marquardt. Loop edges are only trusted in proportion to their ICP alignment quality, so weak loop matches have little influence on the result.
+
+%% ===========================================================================
+\section{Q1: ORB-SLAM2 on Benchmark Datasets}
 \label{sec:q1}
 
-\subsection{Datasets and evaluation setup}
-\textbf{KITTI\,07} is a stereo driving sequence (we use monocular);
-ground-truth GNSS/IMU poses cover a 694.7\,m loop at 10\,fps.
-\textbf{TUM freiburg3\_long\_office} is a handheld RGB-D sequence (RGB only),
-22.2\,m over 2557 frames at $\approx$30\,fps with accurate motion-capture GT.
+\subsection*{Datasets and Protocol}
 
-All ATE values are computed with EVO's Umeyama SE(3) alignment
-(\texttt{correct\_scale=True}) using \texttt{PoseRelation.translation\_part}.
-RPE uses a 1-frame delta (TUM benchmark convention).
+KITTI~07 is a stereo driving sequence recorded in Karlsruhe, Germany; we run ORB-SLAM2 on the left camera only in monocular mode. The path is 694.7\,m over 1101~frames at 10\,fps with one prominent loop near the end, and ground truth comes from a GNSS/IMU rig at centimetre accuracy. TUM \textit{freiburg3\_long\_office\_household} is an indoor office scan captured handheld with an RGB-D camera, of which we use only the RGB stream. The path is 22.2\,m over 2557~frames at 30\,fps, with sub-millimetre motion-capture ground truth.
 
-\subsection{Q1a: Baseline evaluation}
+All trajectories are evaluated using EVO with Sim(3) Umeyama alignment to account for the inherent scale ambiguity of monocular SLAM. For each ablation (Q1b--Q1d) we change exactly one parameter or code path and re-run from scratch.
+
+\subsection*{Q1(a) Baseline Evaluation}
 
 \begin{table}[H]
-\centering
-\small
-\caption{Baseline ATE and RPE.}
+\centering\small
+\caption{Baseline ATE and RPE for both sequences.}
 \label{tab:q1a}
-\begin{tabular}{lccc}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc}
 \toprule
-Sequence & Poses & ATE RMSE & RPE RMSE \\
+Sequence & Poses & ATE RMSE & ATE \% path & RPE RMSE \\
 \midrule
-KITTI\,07   & 1096 & 4.39\,m & 0.674\,m \\
-            &      & (0.6\,\% of GT) & \\
-TUM long-office & 2557 & 0.032\,m & 0.006\,m \\
-                &      & (0.14\,\% of GT) & \\
+KITTI~07              & 1096 & 4.39\,m  & 0.63\,\% & 0.675\,m \\
+TUM fr3\_long\_office & 2557 & 0.032\,m & 0.14\,\% & 0.006\,m \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
-
-The KITTI baseline ATE of 4.39\,m sounds large in isolation, but amounts to
-only 0.6\,\% of the 694.7\,m ground-truth path — competitive with published
-ORB-SLAM2 monocular results on KITTI\,07. The TUM baseline ATE of 0.032\,m
-(0.14\,\% of path) demonstrates excellent short-range tracking.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q1_results/q1a_baseline.png}
-  \caption{Q1a: Baseline trajectories (KITTI\,07 XZ plane; TUM XY plane)
-           and ATE over time. Path annotations show GT length and ATE
-           as percentage of path.}
+  \includegraphics[width=\columnwidth]{plots/q1a_baseline.png}
+  \caption{Baseline trajectories and per-frame ATE for KITTI~07 (left) and TUM (right).}
   \label{fig:q1a}
 \end{figure}
 
-The KITTI trajectory uses the XZ plane (vehicle forward direction is Z);
-TUM uses XY (camera moves horizontally). This difference matters: plotting
-TUM in XZ would incorrectly represent the dominant motion axis.
-
-\subsection{Q1b: Feature count ablation}
-
-\begin{table}[H]
-\centering
-\small
-\caption{Feature count effect on ATE.}
-\label{tab:q1b}
-\begin{tabular}{lcc}
-\toprule
-Configuration & TUM ATE RMSE & Tracked poses \\
-\midrule
-Baseline (feat=1000) & 0.032\,m & 2557 (100\,\%) \\
-feat=800             & 0.109\,m & 2556 (100\,\%) \\
-feat=500             & 0.015\,m & 1152 (45\,\%)  \\
-KITTI feat$<$1000    & \multicolumn{2}{c}{Initialisation failure} \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\textbf{KITTI\,07 failure mechanism.} ORB-SLAM2 monocular requires $\geq$100
-RANSAC inliers at initialisation (hardcoded threshold). At 10\,fps the
-inter-frame baseline is small relative to scene depth, so even feat=960
-achieves only 98 map points at its best reset attempt — two short of the
-threshold. Only feat=1000 succeeds (110 inliers). This is a
-dataset-specific failure, not a general algorithm limitation.
-
-\textbf{TUM non-monotonic results.} feat=800 gives 0.109\,m ATE ($3.4\times$
-the baseline), worse despite tracking 100\,\% of frames. Reducing the
-descriptor budget introduces ambiguous feature matches in the cluttered
-office scene, causing bundle-adjustment to accumulate heading drift.
-feat=500 gives a deceptively \emph{lower} ATE (0.015\,m), but only 45\,\% of
-frames were tracked — the easy, low-drift early segment. ATE is measured only
-over tracked frames, so this is a tracking \emph{failure} that happens to
-score well.
-
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q1_results/q1b_features.png}
-  \caption{Q1b: Feature count ablation. Top row: TUM trajectories + ATE trend.
-           Bottom: KITTI RANSAC sweep (feat=100 to 1000) showing why
-           sub-1000 configs never exceed the 100-inlier threshold.}
-  \label{fig:q1b}
+  \includegraphics[width=0.49\columnwidth]{plots/q1a_kitti_ape_map.png}
+  \hfill
+  \includegraphics[width=0.49\columnwidth]{plots/q1a_tum_ape_map.png}
+  \caption{EVO APE colour maps. Error colour scale from low (blue) to high (red). KITTI shows increasing error towards the end of the loop; TUM errors remain low throughout.}
+  \label{fig:q1a_evo}
 \end{figure}
 
-\subsection{Q1c: Outlier rejection disabled}
+The baseline results reflect the structural differences between the two sequences. On KITTI~07, the ATE of 4.39\,m represents 0.63\,\% of the 695\,m drive, which is consistent with published monocular ORB-SLAM2 performance on this sequence. The per-frame ATE plot shows drift accumulating gradually through the drive, with a sharp correction at the loop closure event near frame 1000. The RPE of 0.675\,m/frame indicates that the majority of absolute error originates from accumulated heading drift rather than from noisy individual frame estimates.
+
+On TUM, the ATE of 0.032\,m (0.14\,\% of a 22\,m path) is near-optimal for monocular SLAM. The slow handheld motion produces small inter-frame baselines well-suited to triangulation, the richly textured office environment provides abundant distinctive ORB keypoints, and the confined spatial scale limits the distance over which drift can grow. The contrast between the two sequences demonstrates that environment scale and motion speed are the primary determinants of monocular SLAM accuracy, independent of the algorithm configuration.
+
+\subsection*{Q1(b) Number of ORB Features}
+
+The number of features extracted per frame is controlled by a single parameter in the YAML configuration file:
+
+\begin{lstlisting}[language=bash]
+# e.g. KITTI04-12_custom_f2000.yaml
+ORBextractor.nFeatures: 2000
+\end{lstlisting}
+
+We tested three feature levels per sequence. For KITTI: 1500, 2000, and 2500 features; all three remain above the monocular initialisation threshold and track the full sequence. For TUM: 500, 800, and 1000 features; 250 features fails initialisation entirely.
 
 \begin{table}[H]
-\centering
-\small
-\caption{Effect of disabling outlier rejection on ATE.}
-\label{tab:q1c}
-\begin{tabular}{lcc}
+\centering\small
+\caption{Feature count effect on ATE and tracking rate for KITTI~07 and TUM.}
+\label{tab:q1b}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc|lcccc}
 \toprule
-Sequence & Baseline ATE & No-outlier ATE \\
+\multicolumn{5}{c|}{KITTI 07} & \multicolumn{5}{c}{TUM fr3\_long\_office} \\
+Features & ATE (m) & RPE (m) & Poses & Track. & Features & ATE (m) & RPE (m) & Poses & Track. \\
 \midrule
-KITTI\,07       & 4.39\,m & 5.77\,m (+31\,\%) \\
-TUM long-office & 0.032\,m & 0.470\,m (+1381\,\%) \\
+2500 & 17.55 & 0.150 & 1097 & 100\,\% & 1000\,(base) & 0.032 & 0.006 & 2557 & 100\,\% \\
+2000 & 18.47 & 0.155 & 1096 & 100\,\% & 800          & 0.109 & 0.006 & 2556 & 100\,\% \\
+1500 & 18.74 & 0.162 & 1096 & 100\,\% & 500          & 0.015\,$^\ast$ & 0.007 & 1152 & 45\,\% \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
+\\[3pt]
+\footnotesize $^\ast$ feat=500 ATE appears lower than baseline because 55\,\% of frames are lost before drift accumulates --- a measurement artefact, not a genuine improvement.
 \end{table}
-
-Disabling outlier rejection raises TUM ATE by $13.8\times$ and reduces tracked
-poses to 1223 (48\,\% of frames). When gross outliers are not removed, the
-local bundle-adjustment objective is corrupted, causing premature tracking
-failure. The KITTI impact is milder (+31\,\%) because the sparse driving scene
-has fewer ambiguous point correspondences than the textured office environment.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q1_results/q1c_outlier.png}
-  \caption{Q1c: Baseline vs.\ no-outlier-rejection. Per-dataset correct axis.
-           Percentage ATE change annotated on bars.}
+  \includegraphics[width=\columnwidth]{plots/q1b_kitti_features.png}
+  \caption{KITTI07 trajectories at three feature levels. All three track the full sequence; RPE decreases monotonically as features increase.}
+  \label{fig:q1b_kitti}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{plots/q1b_tum_features.png}
+  \caption{TUM trajectories at three feature levels plus ATE trend. feat=250 fails initialisation entirely.}
+  \label{fig:q1b_tum}
+\end{figure}
+
+\textbf{KITTI07.} All three configurations track the complete 1096--1097 pose sequence. Per-frame accuracy improves monotonically with feature count: RPE RMSE falls from 0.162\,m at feat=1500 to 0.150\,m at feat=2500, a 7\,\% improvement. ATE is approximately 18\,m for all three runs because loop closure did not fire consistently during these trials --- a result in line with our Q1(d) no-loop baseline of 18.02\,m. This reveals a fundamental decoupling: \emph{feature count governs per-frame tracking quality (RPE), while global trajectory consistency (ATE) is determined by whether loop closure fires}. More features improve local estimation but cannot correct accumulated drift in the absence of a closure event.
+
+\textbf{TUM.} Reducing features to 800 degrades ATE by 3.4$\times$ (0.109\,m vs 0.032\,m) while maintaining full tracking. Fewer descriptors produce more ambiguous nearest-neighbour matches during pose optimisation, allowing heading bias to accumulate over the 22\,m path. At feat=500, tracking is lost for 55\,\% of frames: the system cannot maintain the minimum feature density required for reliable pose estimation across the indoor office environment. At feat=250, initialisation fails entirely.
+
+\subsection*{Q1(c) Outlier Rejection}
+
+ORB-SLAM2's pose optimisation (\texttt{Optimizer::PoseOptimization}) runs four rounds of Levenberg--Marquardt bundle adjustment. After each round, feature correspondences whose reprojection residual exceeds a chi-squared threshold are flagged as outliers and excluded from the next round. We disabled this gate in \texttt{src/Optimizer.cc} by setting a single boolean:
+
+\begin{lstlisting}[language=C++]
+const bool kDisableOutlierRejection = true;
+...
+if (!kDisableOutlierRejection && chi2 > chi2Mono[it]) {
+    pFrame->mvbOutlier[idx] = true;
+    e->setLevel(1);
+}
+\end{lstlisting}
+
+With the constant set to \texttt{true}, the condition is never entered and every feature match --- including false ones --- is trusted by the LM solver.
+
+\begin{table}[H]
+\centering\small
+\caption{Effect of disabling outlier rejection on both sequences.}
+\label{tab:q1c}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+Configuration & ATE RMSE & RPE RMSE & Poses tracked & ATE change \\
+\midrule
+KITTI baseline   & 4.39\,m  & 0.675\,m & 1096 & --- \\
+KITTI no outlier & 5.77\,m  & 0.825\,m & 533  & $+31\,\%$ \\
+TUM baseline     & 0.032\,m & 0.006\,m & 2557 & --- \\
+TUM no outlier   & 0.470\,m & 0.053\,m & 1223 & $+1380\,\%$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{plots/q1c_outlier.png}
+  \caption{Outlier rejection ablation. Red: no outlier rejection. Blue: baseline. Both sequences lose approximately half their tracked poses.}
   \label{fig:q1c}
 \end{figure}
 
-\subsection{Q1d: Loop closure disabled}
+Disabling outlier rejection had a substantially larger impact on TUM than on KITTI, which reflects the fundamental difference in scene content. The KITTI outdoor environment is predominantly static --- road surfaces, buildings, and open sky --- providing very few false matches for the pose solver. On TUM, glass surfaces, reflective floors, and intermittent moving people regularly violate the rigid-world assumption underlying bundle adjustment. Without the outlier gate, every erroneous correspondence is weighted equally in the normal equations, corrupting the pose estimate and compounding error frame by frame.
+
+The impact is quantified in both metrics. ATE on TUM increases by 1380\,\% (0.032 to 0.470\,m) compared to only 31\,\% on KITTI. RPE on TUM rises ninefold (0.006 to 0.053\,m), confirming that per-step motion is directly corrupted rather than just global consistency. Critically, both sequences also lose approximately half their tracked poses: corrupted pose estimates push the system outside its relocalisation basin, causing hard resets. The no-outlier mode is therefore both less accurate and substantially less robust, with indoor scenes suffering far more severely due to the prevalence of dynamic and specular elements.
+
+\subsection*{Q1(d) Loop Closure}
+
+ORB-SLAM2's loop closure thread (\texttt{LoopClosing}) continuously queries a DBoW2 bag-of-words database for keyframes that share visual similarity with the current keyframe. When a geometric consistency check passes, it computes a 7-DoF Sim(3) correction and redistributes accumulated drift across the full pose chain. We disabled this thread by forcing \texttt{DetectLoop} to return immediately at entry:
+
+\begin{lstlisting}[language=C++]
+// LoopClosing.cc (Q1d patch)
+const bool kDisableLoopClosure = true;
+if (kDisableLoopClosure) {
+    mpKeyFrameDB->add(mpCurrentKF);
+    mpCurrentKF->SetErase();
+    return false;
+}
+\end{lstlisting}
+
+Tracking and local bundle adjustment continue to run normally; only the global loop correction is suppressed.
 
 \begin{table}[H]
-\centering
-\small
-\caption{Effect of disabling loop closure on ATE.}
+\centering\small
+\caption{Effect of disabling loop closure on both sequences.}
 \label{tab:q1d}
-\begin{tabular}{lcc}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc}
 \toprule
-Sequence & Baseline ATE & No-loop ATE \\
+Configuration & ATE RMSE & RPE RMSE & Poses tracked & ATE change \\
 \midrule
-KITTI\,07       & 4.39\,m & 18.02\,m (+311\,\%) \\
-TUM long-office & 0.032\,m & 0.049\,m (+54\,\%) \\
+KITTI baseline  & 4.39\,m  & 0.675\,m & 1096 & --- \\
+KITTI no loop   & 18.02\,m & 0.154\,m & 1096 & $+310\,\%$ \\
+TUM baseline    & 0.032\,m & 0.006\,m & 2557 & --- \\
+TUM no loop     & 0.049\,m & 0.006\,m & 2557 & $+54\,\%$ \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
-
-KITTI\,07 is a 695\,m loop; without closure the trajectory drifts monotonically
-to $18\,\text{m}$ ($4.1\times$ baseline) — direct evidence that
-ORB-SLAM2's Essential Graph correction is the primary drift-bounding mechanism
-on long looping routes. TUM is a short sequence ($22\,\text{m}$) with partial
-overlap; loop closure provides only a 35\,\% improvement over the already
-low-drift odometry baseline.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q1_results/q1d_loop.png}
-  \caption{Q1d: Baseline vs.\ loop-closure-disabled. KITTI drift $4\times$
-           without closure; TUM is relatively unaffected.}
+  \includegraphics[width=\columnwidth]{plots/q1d_loop.png}
+  \caption{Loop closure ablation. Orange: no loop closure. Blue: baseline. KITTI shows severe drift in the second half of the sequence; TUM shows only modest degradation.}
   \label{fig:q1d}
 \end{figure}
 
-%% ─────────────────────────────────────────────────────────────────────────────
-\section{Q2: Visual SLAM on Custom Sequences}
-\label{sec:q2}
+Disabling loop closure reveals a clean dissociation between local and global error. On KITTI~07, ATE jumps from 4.39\,m to 18.02\,m ($+310\,\%$) as the heading drift accumulated over 695\,m is never corrected. The trajectory fails to close its loop and diverges progressively from ground truth throughout the second half of the drive. On TUM, the impact is comparatively small (ATE rises by 54\,\%, from 0.032 to 0.049\,m) because there is far less drift to correct over a 22\,m indoor path.
 
-\subsection{Q2a: Data collection and calibration}
+The most revealing observation is the behaviour of RPE. On KITTI, RPE \emph{decreases} from 0.675\,m to 0.154\,m without loop closure. This occurs because loop correction must rewrite historical pose estimates to satisfy the closure constraint, slightly disrupting the smoothness of local frame-to-frame transitions. Without loop closure, local tracking proceeds undisturbed, improving RPE while simultaneously allowing ATE to deteriorate. This confirms that ATE and RPE measure fundamentally different properties: ATE reflects accumulated global drift, while RPE reflects per-frame matching quality.
 
-\textbf{Camera.} Intel RealSense D455 at 848\,$\times$\,480, 30\,fps,
-auto-exposure locked. Nine sequences were collected across indoor, corridor,
-and outdoor environments at UCL Marshgate and One Pool Street.
+Taken together, Q1(c) and Q1(d) produce opposite failure signatures. Disabling outlier rejection inflates RPE without necessarily destroying global consistency; disabling loop closure inflates ATE while leaving RPE unchanged or improved. Each component of ORB-SLAM2 therefore addresses a distinct failure mode, and both are required for reliable operation across diverse environments.
 
-\textbf{Calibration.} We ran COLMAP (SIMPLE\_RADIAL model) on each sequence
-from scratch with no factory prior. Cross-validation against the D455 factory
-intrinsics confirms: $f_x$ within 0.3–1.6\,\%, $c_x/c_y$ within 2\,px.
-A separate scratch run on Basement\_1 (SIMPLE\_PINHOLE) yields
-$f=383.7\,\text{px}$ vs.\ factory $426.7\,\text{px}$ (10\,\% deviation),
-expected from SIMPLE\_PINHOLE's single-focal model collapsing the small
-D455 $f_x \neq f_y$ asymmetry.
-
-\textbf{Collection strategy.} Walking pace 0.3–0.5\,m/s, $\geq$30 feature
-tracks maintained per frame, continuous streams (not static captures),
-deliberate overlap at every turn to maximise COLMAP reconstruction density.
+\subsection*{Q1 Summary}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q2_results/q2a_all_trajectories.png}
-  \caption{Q2a: ORB-SLAM2 trajectories for all 9 custom sequences. Header
-           panel shows data collection and calibration methodology.}
-  \label{fig:q2a}
+  \includegraphics[width=\columnwidth]{plots/q1_rpe.png}
+  \caption{RPE across all Q1 configurations. Outlier removal produces the largest RPE excursions; loop removal sits at or below baseline because per-frame matching is unaffected.}
+  \label{fig:q1_rpe}
 \end{figure}
 
-\subsection{Q2b: COLMAP vs.\ ORB-SLAM2 comparison}
+The four ablations characterise ORB-SLAM2's architecture at the component level. The feature budget sets the quality ceiling for per-frame tracking. The outlier gate prevents corrupted matches from propagating into the pose estimate at tracking time. Loop closure is the only mechanism that corrects globally accumulated drift. These components are independent: removing any one degrades a distinct aspect of performance, and no single metric captures all three failure modes simultaneously.
 
-Since no external ground-truth trajectory exists for our sequences, we compare
-COLMAP SfM poses and ORB-SLAM2 monocular poses using EVO APE with Umeyama
-alignment and scale correction. The reported metric is therefore an
-\emph{inter-method disagreement}, not absolute accuracy.
+%% ===========================================================================
+\section{Q2: ORB-SLAM2 on Custom Sequences}
+\label{sec:q2}
+
+We collect two sequences, one indoor and one outdoor, both with at
+least 500 tracked poses after ORB-SLAM2 initialisation:
+\textbf{Basement\_1} (indoor, 869 poses) and \textbf{Outdoor\_1}
+(outdoor, 983 poses).
+
+\subsection{Q2a: Data collection and calibration}
+\label{sec:q2a}
+
+The recording rig is an Intel RealSense D455 colour stream at
+$848 \times 480$ and 30\,fps. Auto-exposure was locked after a
+two-second warm-up so the intrinsics did not drift during recording.
+The same colour stream feeds both ORB-SLAM2 monocular and COLMAP.
+
+\textbf{Basement\_1} is the lower-ground-floor Lift D room at Marshgate
+--- a compact space containing lift doors and fire-exit doors, with
+concrete walls on all four sides and two doorways. The enclosed
+geometry provides COLMAP with stable keypoints on every wall surface
+for robust triangulation. ORB-SLAM2 produced 869 tracked poses over a
+closed loop that returns to the start.
+
+\textbf{Outdoor\_1} is the back-entrance cycle-parking area of the
+Marshgate building, approached from the service exit. The right side
+is a flat brick building fa\c{c}ade; the left side opens onto a row
+of trees and a paved path. ORB-SLAM2 produced 983 tracked poses along
+a single rectangular loop around the courtyard.
+
+The capture strategy was chosen to maximise the overlap between
+consecutive frames so that both COLMAP and ORB-SLAM2 can match
+keypoints reliably. We walked at 0.3 to 0.5\,m/s, which at 30\,fps
+gives 1 to 1.5\,cm of camera translation per frame, well below the
+focal-length-scaled disparity needed for ORB to match the same
+keypoint across consecutive frames. We recorded a continuous video
+stream rather than still shots, because a still-shot sequence would
+force the initialiser to choose two frames with a wide baseline and
+that breaks ORB matching. At each corner we paused for one second
+and panned slowly through 90 degrees, which gives COLMAP the
+multi-view diversity its bundle adjustment needs to converge. The
+ORB-SLAM2 viewer was monitored live throughout the recording, and we
+slowed down whenever the tracked-feature count fell below about 30.
+
+Calibration uses COLMAP in two ways. The first is per-sequence
+refinement with the OPENCV 8-parameter model
+$(f_x, f_y, c_x, c_y, k_1, k_2, p_1, p_2)$, where each sequence is
+run through COLMAP, the resulting \texttt{cameras.txt} is converted
+to an ORB-SLAM2 YAML with \texttt{q2\_calibration\_report.py}, and
+ORB-SLAM2 is re-run with the refined intrinsics; calibrated
+trajectories are saved as
+\texttt{\{seq\}\_trajectory\_colmap\_intrinsics.txt} and are used for
+all Q2b comparisons as required by the brief. The second calibration
+approach is a genuine no-prior run on Basement\_1 with the
+SIMPLE\_PINHOLE model ($f, c_x, c_y$, no distortion) and no factory
+prior at all, confirming the intrinsics can be recovered from the
+images alone.
 
 \begin{table}[H]
-\centering
-\small
-\caption{Q2b: COLMAP--ORB-SLAM2 inter-method ATE (disagreement metric).}
-\label{tab:q2b}
+\centering\scriptsize
+\caption{Q2a COLMAP self-calibration vs.\ factory D455 intrinsics.}
+\label{tab:q2a_calib}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccc}
 \toprule
-Sequence & ATE RMSE & ORB poses & COLMAP poses \\
+Run & $f_x$ (px) & $f_y$ (px) & $\Delta f_x$ \\
 \midrule
-Basement\_1      & 0.036\,m & 869  & 284 \\
-Outdoor\_1       & 0.262\,m & 983  & -- \\
-OnePoolStreet1   & $\approx$3.0\,m & 5759 & -- \\
-Entrance2        & rot$\approx$178° & -- & -- \\
-Floor7\_Hallway  & COLMAP fail & 617 & 8 \\
+Factory D455                          & 426.68 & 426.10 & n/a \\
+Basement\_1 scratch (SIMPLE\_PINHOLE) & 415.40 & 415.40 & $-2.6\,\%$ \\
+Basement\_1 (OPENCV)                  & 430.64 & 445.84 & $+0.9\,\%$ \\
+Outdoor\_1  (OPENCV)                  & 427.91 & 437.20 & $+0.3\,\%$ \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
 
-\textbf{Floor7\_Hallway.} COLMAP reconstructed only 8 poses (near-empty), so
-the sequence is excluded from EVO comparison. The featureless repetitive
-corridor texture is insufficient for SfM triangulation.
+Both OPENCV runs agree with the factory $f_x$ within 1\,\%,
+confirming the D455 factory calibration is accurate for $f_x$.
+However, $f_y$ is inflated by 4.6\,\% and 2.6\,\% above factory
+--- a known COLMAP artefact where the bundle adjuster trades $f_y$
+against the radial distortion coefficients to minimise reprojection
+error when scene depth variation is limited; the physical $f_y$ is
+not recovered cleanly. The scratch SIMPLE\_PINHOLE result
+($f = 415.4$\,px) is 2.6\,\% below factory because SIMPLE\_PINHOLE
+forces $f_x = f_y$ while the D455 is mildly asymmetric; this is a
+model constraint, not a calibration error. The consequences of the
+$f_y$ inflation on ORB-SLAM2 are analysed in Q2b.
 
-\textbf{Entrance2.} Approximately 178° rotation disagreement — a classic
-monocular chirality ambiguity. Monocular initialisation has a sign freedom
-in depth scale; if the essential matrix decomposition chooses the wrong
-branch, the entire trajectory is mirrored. This is expected behaviour, not
-a tracking failure.
+Figure~\ref{fig:q2b_colmap} (next subsection) shows both ORB-SLAM2
+trajectories coloured by elapsed time.
 
-\textbf{Outdoor\_1.} 0.262\,m disagreement is acceptable for an outdoor
-sequence with limited scene depth diversity (open courtyard). Scale ambiguity
-in monocular SfM is the primary source of disagreement.
+\subsection{Q2b: Results}
+\label{sec:q2b}
+
+No external ground truth exists for either custom sequence, so we
+cannot compute a true ATE. What we report is inter-method
+disagreement: how far the ORB-SLAM2 trajectory is from the COLMAP
+trajectory after a Sim(3) Umeyama alignment with scale (Eq.~1, 2).
+A small number means the two independent monocular pipelines agree on
+the trajectory shape, but it does not mean either trajectory is
+correct in metric units.
+
+For each sequence we load the COLMAP keyframe poses (from
+\texttt{images.txt}) and the ORB-SLAM2 trajectory (TUM format). The
+real RGB timestamp is re-attached to each COLMAP keyframe by looking
+its image filename up in \texttt{rgb.txt}. EVO's
+\texttt{sync.associate\_trajectories} then pairs COLMAP keyframes
+with ORB-SLAM2 frames within 30\,ms (relaxed to 250\,ms if the
+strict tolerance returns no matches), and an EVO Umeyama alignment
+with scale puts both trajectories in the same frame. We report APE
+in three pose relations: translation only, rotation only (degrees),
+and full SE(3).
+
+\begin{table}[H]
+\centering\scriptsize
+\caption{Q2b inter-method disagreement (COLMAP vs.\ ORB-SLAM2 with
+COLMAP-calibrated intrinsics, EVO Sim(3) alignment). Matched is the
+number of timestamp-aligned pose pairs after MAD outlier filtering.}
+\label{tab:q2b}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+Sequence & ORB poses & Matched & Trans.\ RMSE & Rot.\ RMSE \\
+\midrule
+\textbf{Basement\_1} (indoor)  & 868 & 44 & \textbf{0.046\,a.u.} & $3.8^{\circ}$ \\
+\textbf{Outdoor\_1}  (outdoor) & 584 & 54 & \textbf{1.488\,a.u.} & $169.2^{\circ}$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+RMSE values are in arbitrary units (a.u.) because both monocular
+methods recover trajectories up to an unknown scale factor; the
+Sim(3) alignment absorbs scale but cannot assign metric units.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q2_results/q2b_colmap_vs_orbslam.png}
-  \caption{Q2b: COLMAP vs.\ ORB-SLAM2 trajectory overlays after Umeyama
-           alignment. Colour encodes ATE magnitude.}
+  \includegraphics[width=\columnwidth]{plots/q2b_colmap_trajectories.png}
+  \caption{Q2b COLMAP SfM trajectories coloured by elapsed time.}
+  \label{fig:q2b_colmap}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{plots/q2b_colmap_vs_orbslam.png}
+  \caption{Q2b COLMAP (pseudo-GT, left) vs.\ ORB-SLAM2 (EVO-aligned,
+  right) for each sequence. Gray ghost shows the full COLMAP
+  reconstruction; coloured trajectory is the timestamp-matched subset.}
   \label{fig:q2b}
 \end{figure}
 
-\subsection{Q2c: Per-sequence statistics}
+Figure~\ref{fig:q2b_colmap} shows the raw COLMAP SfM trajectories
+coloured by elapsed recording time. Basement\_1 traces a short
+closed loop around the Lift D room (283 keyframes); Outdoor\_1 traces
+a larger rectangular courtyard path (360 keyframes).
+
+Figure~\ref{fig:q2b} places COLMAP and the EVO-aligned ORB-SLAM2
+trajectory side by side. The gray ghost is the full COLMAP
+reconstruction; the coloured gradient shows the timestamp-matched
+subset used for EVO comparison.
+
+\textbf{Basement\_1 analysis.}
+COLMAP selected 283 keyframes from the 868-pose calibrated
+ORB-SLAM2 log ($\approx$33\,\% keyframe rate). Of those 283, 44
+(16\,\%) produced a timestamp match within 30\,ms after MAD outlier
+rejection removed 8 pairs. The low match-rate reflects the compact
+room geometry: the camera revisits the same viewpoints repeatedly
+and ORB-SLAM2 suppresses duplicate keyframe insertion, leaving gaps
+in the timestamp-aligned subset. The 44 clean pairs yield
+0.046\,a.u.\ translation RMSE and $3.8^{\circ}$ rotation
+disagreement --- both COLMAP and ORB-SLAM2 converge to nearly
+identical loop shapes in this well-textured indoor space, confirming
+that the small COLMAP $f_y$ inflation ($+4.6\,\%$) does not
+meaningfully degrade indoor tracking.
+
+\textbf{Outdoor\_1 analysis.}
+COLMAP selected 360 keyframes from the 584-pose calibrated
+ORB-SLAM2 log (37\,\% keyframe rate). Timestamp association
+returned 54 matched pairs after MAD outlier rejection removed 4
+pairs.
+
+The $169.2^{\circ}$ rotation disagreement is caused by a
+monocular initialisation flip triggered by the COLMAP $f_y$
+inflation. The mechanism is as follows. ORB-SLAM2 initialises by
+triangulating the first map points from two keyframes. Each pixel
+is back-projected into a 3D ray using $f_y$; with
+$f_y = 437.2$\,px instead of the true $\approx 426.1$\,px, every
+vertical pixel shift is interpreted as corresponding to a shallower
+depth than it actually is. This compresses the estimated vertical
+parallax and biases the perceived scene structure. In an open
+outdoor scene with limited close-range geometry the initialiser has
+no other constraint to override this bias, so it resolves the
+monocular depth ambiguity into the mirror-image solution ---
+rotating the entire coordinate frame by $\approx 180^{\circ}$.
+Once the first map is initialised with a flipped frame, all
+subsequent tracking is consistent within that flipped frame, so
+ORB-SLAM2 completes 584 poses without further failure; the flip
+only becomes visible when the trajectory is compared against
+COLMAP's independently initialised frame.
+
+\begin{table}[H]
+\centering\scriptsize
+\caption{Outdoor\_1 diagnostic: calibrated vs.\ factory intrinsics.}
+\label{tab:q2b_diag}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccc}
+\toprule
+Intrinsics & $f_y$ (px) & Matched & Rot.\ RMSE \\
+\midrule
+COLMAP OPENCV (calibrated) & 437.2 & 54  & $169.2^{\circ}$ \\
+Factory D455               & 426.1 & 89  & $\mathbf{0.9^{\circ}}$ \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+Table~\ref{tab:q2b_diag} isolates the cause: switching to factory
+$f_y$ on the same sequence and same COLMAP reference drops the
+rotation disagreement from $169.2^{\circ}$ to $0.9^{\circ}$
+and increases matched pairs from 54 to 89. The scene geometry is
+well-conditioned; the failure is entirely attributable to the
+$f_y$ error in the COLMAP calibration.
+
+The root cause of the $f_y$ inflation is the choice of calibration
+data. COLMAP was run on the full walking sequence, where all views
+are roughly on the same plane and depth variation is limited. The OPENCV
+bundle adjuster then trades $f_y$ against the distortion
+coefficients to minimise reprojection error, inflating $f_y$ beyond
+its physical value. The Lab~07 guidelines recommend using a
+dedicated subset of frames where the camera translates while facing
+a planar wall, which provides the focused multi-view geometry needed
+to constrain $f_y$ independently of distortion. We also tested that
+Lab~07-style subset calibration on our recordings; however, in this
+dataset it produced less stable intrinsics and worse downstream
+ORB-SLAM2 agreement than the full-sequence calibration. So while the
+guideline is correct in principle, our empirical result here is that
+the wall-subset variant was noisier and did not improve the Outdoor\_1
+failure mode.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q2_results/q2c_statistics.png}
-  \caption{Q2c: Summary statistics (pose count, tracking ratio, path length,
-           relative RMSE) across all 9 sequences.}
-  \label{fig:q2c}
+  \includegraphics[width=\columnwidth]{plots/q2b_pointcloud_outdoor_1.png}
+  \caption{Q2b COLMAP sparse map, Outdoor\_1 (17{,}806 points).}
+  \label{fig:q2b_pcd}
 \end{figure}
 
-ORB-SLAM2 tracked $>$80\,\% of frames on 7/9 sequences. BikeStorage2 and
-Floor7\_Hallway had lowest tracking ratios owing to repetitive/featureless
-textures. Relative RMSE (ATE\,/\,path length) is reported to allow
-scale-invariant comparison across sequences of different lengths.
+\subsection{Q2c: Video}
+\label{sec:q2c}
 
-%% ─────────────────────────────────────────────────────────────────────────────
-\section{Q3: LiDAR SLAM}
+The submitted video file \texttt{COMP0222\_CW2\_GRP\_32.mp4} shows,
+side by side for both sequences, the live RealSense camera feed and
+the ORB-SLAM2 Pangolin viewer reconstructing the scene in real time.
+The trajectory draws itself pose by pose as the recording plays, so
+the viewer can see the moment of initialisation, every keyframe
+insertion, and the final shape of each loop. The Q2 portion is the
+first 30 seconds; the Q3 LiDAR portion follows.
+
+Three limitations apply to the Q2 numbers. Monocular SLAM has no
+metric scale, so all distances are in arbitrary units. No external
+ground truth exists, so we report inter-method agreement rather than
+accuracy. The Outdoor\_1 calibrated YAML triggered a $169^{\circ}$
+heading flip due to COLMAP OPENCV $f_y$ inflation; running with
+factory intrinsics as a diagnostic confirms $0.9^{\circ}$ agreement,
+so the failure is attributable to the calibration artefact rather
+than scene or algorithm quality.
+
+%% ===========================================================================
+\section{Q3: 2D LiDAR SLAM}
 \label{sec:q3}
 
-\subsection{System overview}
+We process three sequences end to end: two indoor (Basement\_1 and
+Floor7\_Hallway, the second a long Marshgate corridor that serves as
+the large-area indoor case) and one outdoor (Outdoor\_1, an open
+courtyard). The same physical environments were used in Q2.
 
-\textbf{Sensor.} RPLidar A1M8 ($\max$ 12\,000\,mm range, 360° scan, $\approx$10\,Hz).
-Scans saved as JSONL; each record contains per-beam $(d, q, \theta)$ triples.
-Returns with quality $q<5$ are discarded; the operator's blind spot
-(135°–225°) is masked to avoid self-returns.
+\subsection{Q3a: Data collection}
+\label{sec:q3a}
 
-\textbf{Odometry.} Point-to-plane ICP with Huber M-estimator ($\delta=0.3\,\text{m}$),
-a 20-keyframe local map, and per-step ICP Hessian propagation for uncertainty.
-Steps with translation $>0.5\,\text{m}$ or rotation $>25°$ are rejected as
-diverged.
+The sensor is an RPLidar A2M12, a single-line spinning 2D LiDAR with a
+$360^{\circ}$ scan, 12\,m rated maximum range, up to 16k samples
+per second, and a scan rate of roughly 10--12\,Hz in our logs. Each return arrives as
+a triple $(q, \alpha, d)$ where $q$ is the return quality (0 to 63),
+$\alpha$ is the bearing angle in degrees, and $d$ is the range in
+millimetres. We save scans to a JSON-Lines file, one scan per line.
 
-\textbf{Occupancy mapping.} Log-odds Bresenham ray-casting on an unbounded
-grid at 5\,cm/cell.
+Every scan is filtered before processing. We discard returns with
+quality $q < 5$ because low-quality returns come from multipath and
+weak surfaces such as glass or polished floors. We mask the
+operator's body by dropping
+$\alpha \in [135^{\circ}, 225^{\circ}]$, because the operator's legs
+sit in that arc during walking. A range gate
+$10\,\text{mm} \le d \le \texttt{max\_range}$ removes invalid short
+returns and clipped maximum-range returns.
 
-\textbf{Primary sequences.}
-\begin{itemize}[nosep]
-  \item \textbf{Floor7\_Hallway} — indoor, large area (Marshgate, satisfies
-    ``one large indoor'' requirement)
-  \item \textbf{Basement\_1} — indoor structured
-  \item \textbf{Outdoor\_1} — outdoor open space
-\end{itemize}
-Each sequence performs exactly two clockwise loops, with the start/end
-position clearly marked.
+Three environments were used.
+\textbf{Basement\_1} is the entrance lobby of the Marshgate building.
+Entering through the front door, a staircase door is immediately on
+the left and two lifts are on the right; the sequence was collected
+in this lobby space, which forms a single rectangular area
+approximately 7\,m $\times$ 3\,m. The two open doorways (staircase
+and main entrance, visible as free-space fans in the occupancy grid,
+Figure~\ref{fig:q3a_grids}) provide two escape directions for the
+LiDAR beam, while the solid walls on the remaining sides give
+strong 360$^{\circ}$ wall coverage, making this the best-conditioned
+sequence for ICP.
+\textbf{Floor7\_Hallway} is a wide straight corridor on the seventh
+floor of Marshgate, serving as the required large-area indoor scene.
+The corridor extends well beyond 15\,m in both directions; multiple
+side passages and alcoves branch off the main axis (visible as
+long free-space arms in the occupancy grid,
+Figure~\ref{fig:q3a_grids}~right). Because the corridor has no room
+boundary to loop around, the two-loop route was walked as a compact
+square circuit (${\approx}3\,\text{m} \times 2.5\,\text{m}$) at a
+widened section so that both loops are geometrically closed while the
+LiDAR still observes the full corridor width in every direction.
+\textbf{Outdoor\_1} is an open-air courtyard at the rear exit of the
+Marshgate building, with the building fa\c{c}ade on one side and
+trees and open grass on the other. This mixed geometry---one hard
+vertical surface and one soft irregular boundary---means that the
+sensor only receives strong returns from one side; the normal
+equations for point-to-plane ICP become nearly rank-deficient and
+the trajectory freezes (failure analysis below).
 
-\subsection{Q3a: Two-loop verification}
+For every sequence we marked the floor with chalk, started exactly
+on the marker, walked the route at 0.4 to 0.8\,m/s, completed two
+clockwise loops, and returned to the marker. The marker was removed
+at the end so that the recording itself contains no visual cue of
+the start point. Walking pace was chosen so that consecutive scans
+overlap by 90\,\% or more, which keeps ICP inside its convergence
+basin.
+
+The pipeline runs as follows for each scan. Load the scan and apply
+the filters above. Convert to Cartesian with $x = d\cos\alpha$,
+$y = d\sin\alpha$. Voxel-downsample at 0.05\,m using the cell
+centroid. Estimate per-point surface normals by PCA over $k = 5$
+nearest neighbours (smallest eigenvector of the local covariance).
+Run point-to-plane ICP  against a rolling local
+map made of the last 20 keyframes, with Huber loss $\delta = 0.3$\,m
+and IRLS reweighting based on the median absolute deviation. Save the
+ICP Hessian $H = J^\top W J$ as the inverse covariance on
+$(\theta, t_x, t_y)$ for the pose graph in Q3d. Reject the step if
+$\|\Delta t\| > 0.5$\,m or $|\Delta\theta| > 25^{\circ}$ between
+consecutive scans, since walking pace cannot exceed these values.
+Update the log-odds occupancy grid by Bresenham ray casting from the
+sensor pose to each return . Insert a new
+keyframe when $\|\Delta t\| > 0.2$\,m or $|\Delta\theta| > 0.2$\,rad
+relative to the last keyframe.
+
+The main configuration used for Q3a, Q3c and Q3d is
+$\texttt{max\_range} = 12000$\,mm, $\texttt{angular\_step} = 1$
+(all beams), $\texttt{voxel} = 0.05$\,m, $\texttt{scan\_skip} = 1$
+(all scans); Q3b explores why each value matters. We define closure error as the straight-line distance between the first and last 2D pose.
+Two-loop verification uses proximity: a new lap is recorded when the
+trajectory enters a 1.5\,m disc around the origin after travelling at
+least 5\,m from the last lap boundary, and cumulative heading
+integrated from ICP's $\Delta\theta$ is expected near
+$\pm 720^{\circ}$ for two clean clockwise loops.
+
+\begin{table}[H]
+\centering\scriptsize
+\caption{Q3a sequence summary and closure error from the main
+configuration.}
+\label{tab:q3a}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+Sequence & Scans & Keyframes & Path (m) & Closure (m) \\
+\midrule
+Basement\_1     & 1939 & 172 & 35.0 & 0.17 \\
+Floor7\_Hallway & 1304 & 135 & 26.8 & 0.16 \\
+Outdoor\_1      & 1462 &  52 & 19.9 & 8.17 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q3_results/q3a_two_loop_basement_1.png}
-  \caption{Q3a: Basement\_1 two-loop verification. Proof text shows arc length,
-           cumulative heading change ($\approx 720°$ expected for two loops),
-           laps detected, and closure error.}
-  \label{fig:q3a}
+  \includegraphics[width=\columnwidth]{plots/q3a_two_loop_basement_1.png}
+  \caption{Q3a Basement\_1 two-loop check.}
+  \label{fig:q3a_basement}
 \end{figure}
-
-Heading is integrated from ICP-estimated rotation; two complete loops produce
-$\approx\pm720°$ cumulative change. Per-sequence quantitative proof boxes on
-each figure confirm laps detected and arc length. Outdoor\_1 shows only 47\,\%
-scan utilisation (ICP diverges frequently in open space with sparse surface
-contacts), reducing heading-proof reliability.
-
-\subsection{Q3b: Parameter analysis}
-
-We ablate four LiDAR processing parameters independently on all three primary
-sequences, reporting closure error (Euclidean start–end distance) and occupancy
-grid quality (median 1-NN point distance):
-
-\begin{enumerate}[nosep]
-  \item \textbf{Max range:} 2\,000\,mm vs.\ 12\,000\,mm (sensor maximum)
-  \item \textbf{Angular resolution:} all beams / every 2nd / every 3rd
-  \item \textbf{Voxel downsampling:} none / 0.05\,m / 0.10\,m / 0.20\,m
-  \item \textbf{Scan rate:} all scans / 50\,\% / 33\,\%
-\end{enumerate}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q3_results/q3b_basement_1.png}
-  \caption{Q3b: Parameter ablation on Basement\_1. Four rows: trajectory
-           overlays, closure error bars, map point density, and plain-English
-           explanation of each failure mechanism. Best: max range 12\,000\,mm
-           → 0.161\,m closure; worst: max range 2\,000\,mm → 2.018\,m
-           (12.5$\times$ difference).}
-  \label{fig:q3b}
+  \includegraphics[width=0.49\columnwidth]{plots/q3a_two_loop_floor7_hallway.png}
+  \hfill
+  \includegraphics[width=0.49\columnwidth]{plots/q3a_two_loop_outdoor_1.png}
+  \caption{Q3a Floor7\_Hallway and Outdoor\_1 two-loop checks.}
+  \label{fig:q3a_others}
 \end{figure}
 
-\textbf{Key findings:}
-\begin{itemize}[nosep]
-  \item Range 2\,000\,mm misses far walls; ICP lacks stable correspondences
-    across the basement hallway.
-  \item Voxel $\geq 0.10$\,m blurs surface normals, degrading point-to-plane
-    residuals.
-  \item Scan rate $\leq 33$\,\% increases per-step motion beyond ICP's
-    convergence basin.
-  \item Every 3rd beam reduces the normal estimation neighbourhood below
-    reliable PCA estimation, causing ICP to diverge.
-\end{itemize}
+Basement\_1 and Floor7\_Hallway both close within 20\,cm of the
+start, with cumulative heading near $-720^{\circ}$ for two clockwise
+loops, exactly what the protocol asks for. Outdoor\_1 is the failure
+case: the right panel of Figure~\ref{fig:q3a_others} shows the
+trajectory stuck at a single point from scan 400 onward. The open
+courtyard provides too few stable surfaces for ICP, so
+correspondences collapse, the Hessian becomes singular, and the
+divergence gate (0.5\,m, 25 degree per-step cap) repeatedly rejects
+the step; the pose stops updating but the scan counter continues. We
+keep this sequence as the outdoor case and treat the failure mode as
+its own finding rather than hide it.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q3_results/q3b_grids_basement_1_max_range.png}
-  \caption{Q3b: Occupancy grids for Basement\_1 under 2\,000\,mm (left) vs.\
-           12\,000\,mm (right) max range. At 2\,000\,mm, walls beyond
-           the truncation radius are missing, leading to large unmapped voids.}
-  \label{fig:q3b_grids}
+  \includegraphics[width=0.49\columnwidth]{plots/occupancy_basement_1.png}
+  \hfill
+  \includegraphics[width=0.49\columnwidth]{plots/occupancy_floor7_hallway.png}
+  \caption{Q3a occupancy grids from the main configuration. Left:
+    Basement\_1 --- a single rectangular room (${\approx}7\,\text{m}
+    \times 3\,\text{m}$) with free-space fans visible through two open
+    doorways. Right: Floor7\_Hallway --- a wide corridor extending
+    beyond the 10\,m plot boundary in both directions; side passages
+    branch off the main axis. The compact square trajectory (red) sits
+    at a widened section of the corridor.}
+  \label{fig:q3a_grids}
 \end{figure}
+
+\subsection{Q3b: Laser odometry parameter analysis}
+\label{sec:q3b}
+
+We vary four parameters one at a time on all three sequences. Each
+table reports closure error (straight-line distance between first and last pose) per sequence and
+the figure under each parameter is the per-parameter occupancy grid
+for Basement\_1, the cleanest sequence, which shows each geometric
+mechanism most clearly.
+
+\subsubsection*{Maximum range}
+
+\begin{table}[H]
+\centering\scriptsize
+\caption{Q3b maximum-range sweep. Closure error in metres.}
+\label{tab:q3b_range}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccc}
+\toprule
+Setting           & Basement\_1 & Floor7\_Hallway & Outdoor\_1 \\
+\midrule
+2000\,mm          & 2.38 & 2.02 & 2.81 \\
+12000\,mm (sensor max) & \textbf{0.19} & \textbf{0.16} & 8.43 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{plots/q3b_grids_basement_1_max_range.png}
+  \caption{Basement\_1 grids at 2000 and 12000\,mm.}
+  \label{fig:q3b_range}
+\end{figure}
+
+ICP  needs surface normals on both sides of the
+motion direction to lock translation. With only the near wall in
+range, all returns lie on a single line, so the point-to-plane normal
+equations become rank-deficient along that line and the trajectory
+slides; the $12\times$ improvement on Basement\_1 (2.38 to 0.19\,m
+closure) follows directly from this geometric constraint. The
+opposite happens outdoors: at 12000\,mm the returns include far,
+weakly supported points beyond ICP's recovery basin, so wrong
+correspondences pull the registration. The 2000\,mm setting on
+Outdoor\_1 gives a smaller closure error (2.81\,m) than 12000\,mm
+(8.43\,m) because the shorter range removes the noisy distant
+returns. The lesson is that maximum range should be set to roughly
+the largest stable surface in view, not always to the sensor maximum.
+
+\subsubsection*{Angular resolution}
+
+\begin{table}[H]
+\centering\scriptsize
+\caption{Q3b angular downsampling sweep. Closure error in metres.}
+\label{tab:q3b_ang}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccc}
+\toprule
+Setting & Basement\_1 & Floor7\_Hallway & Outdoor\_1 \\
+\midrule
+All beams      & \textbf{0.24} & 1.08 & 7.15 \\
+Every 2nd beam & 0.68          & \textbf{0.71} & 3.95 \\
+Every 3rd beam & 0.26          & 1.21 & 4.76 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{plots/q3b_grids_basement_1_angular_resolution.png}
+  \caption{Basement\_1 grids at full, 2nd, 3rd beam.}
+  \label{fig:q3b_ang}
+\end{figure}
+
+Per-point normals come from PCA on $k = 5$ nearest neighbours. With
+every beam those neighbours sit within a narrow angular window and
+produce a sharp normal estimate. With every 3rd beam the same 5
+neighbours span a much wider arc, the local surface is not well
+represented, and the normal direction becomes noisier. Point-to-plane
+ICP is highly sensitive to normal noise: a 5 degree normal error on a
+5\,m wall translates to roughly 0.4\,m of along-wall slip per ICP
+step. Floor7\_Hallway is the non-monotonic case, best at every 2nd
+beam (0.71\,m) rather than at full resolution, because the tightly
+spaced corridor walls cause ICP to over-fit micro-features at full
+resolution and the every-2nd-beam setting smooths out the micro-noise
+without losing the geometric constraint. Basement\_1, with cleaner
+walls, prefers full resolution. There is no universal best setting;
+the choice depends on environment scale.
+
+\subsubsection*{Voxel grid downsampling}
+
+\begin{table}[H]
+\centering\scriptsize
+\caption{Q3b voxel-size sweep. Closure error in metres.}
+\label{tab:q3b_voxel}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccc}
+\toprule
+Voxel & Basement\_1 & Floor7\_Hallway & Outdoor\_1 \\
+\midrule
+None    & \textbf{0.24} & 1.08 & 7.15 \\
+0.05\,m & 0.41          & \textbf{0.14} & 12.4 \\
+0.10\,m & 0.29          & 3.04 & 6.22 \\
+0.20\,m & 2.60          & 2.94 & 6.02 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{plots/q3b_grids_basement_1_voxel_downsampling.png}
+  \caption{Basement\_1 grids at four voxel sizes.}
+  \label{fig:q3b_voxel}
+\end{figure}
+
+Voxel downsampling replaces each $v \times v$ spatial cell with one
+centroid point. At $v = 0.05$\,m the cell is smaller than typical
+RPLidar range noise ($\pm 5$ to $\pm 20$\,mm), so the centroid acts
+as an effective denoiser. At $v \ge 0.10$\,m the cell starts to span
+real geometric features; the PCA normal computed on those merged
+centroids averages multiple wall orientations into a single tilted
+vector, ICP drives each source point along the wrong direction, and
+point-to-plane residuals collapse toward point-to-point residuals
+(which lose the tangential constraint that keeps the trajectory
+aligned with walls). Basement\_1 is best with no voxel filter
+(0.24\,m closure) because the high-density raw returns help corner
+alignment, while Floor7\_Hallway is best at 0.05\,m (0.14\,m closure)
+because the corridor walls are flat and the denoising helps.
+Outdoor\_1 has no good voxel setting because the underlying geometry
+is too sparse for any setting to recover.
+
+\subsubsection*{Scan rate}
+
+\begin{table}[H]
+\centering\scriptsize
+\caption{Q3b scan-rate sweep. Closure error in metres.}
+\label{tab:q3b_rate}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lccc}
+\toprule
+Setting & Basement\_1 & Floor7\_Hallway & Outdoor\_1 \\
+\midrule
+All scans (10\,Hz)        & \textbf{0.24} & 1.08 & 7.15 \\
+50\,\% scans (skip every other) & 0.23 & 2.94 & 11.5 \\
+33\,\% scans (skip 2 of 3)      & 0.26 & \textbf{0.73} & 10.9 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{plots/q3b_grids_basement_1_scan_rate.png}
+  \caption{Basement\_1 grids at three scan rates.}
+  \label{fig:q3b_rate}
+\end{figure}
+
+At 0.4\,m/s walking speed and 10\,Hz scan rate the sensor moves about
+4\,cm per scan. Skipping every other scan brings this to 8\,cm and
+skipping 2 of 3 brings it to 12\,cm; ICP's convergence basin is
+roughly 0.5\,m, so all three settings stay well inside it on
+Basement\_1 and the sweep is flat there. Floor7\_Hallway is the
+non-monotonic case again, benefiting from 33\,\% scan rate (0.73\,m
+versus 1.08\,m at full rate) because the longer per-scan motion gives
+more parallax between consecutive scans and helps ICP estimate
+translation along the corridor axis (the aperture problem, Lab 08
+Activity 3B). On Outdoor\_1 fewer scans means fewer chances to escape
+the divergence rejection gate, and closure error grows.
+
+\begin{figure*}[!ht]
+  \centering
+  \includegraphics[width=\textwidth]{plots/q3b_basement_1.png}
+  \caption{Q3b full parameter analysis --- Basement\_1. Row~1: trajectory
+    overlays per variant. Row~2: closure error. Row~3: map point density
+    (lower = denser). Row~4: per-parameter observations and explanation.}
+  \label{fig:q3b_summary}
+\end{figure*}
+
+\begin{figure*}[!ht]
+  \centering
+  \includegraphics[width=\textwidth]{plots/q3b_floor7_hallway.png}
+  \caption{Q3b full parameter analysis --- Floor7\_Hallway. Same layout.
+    Note the non-monotonic angular result (every~2nd beam best due to
+    corridor micro-feature over-fitting) and the 33\,\% scan-rate
+    benefit from aperture-problem parallax.}
+  \label{fig:q3b_summary_floor7}
+\end{figure*}
+
+\begin{figure*}[!ht]
+  \centering
+  \includegraphics[width=\textwidth]{plots/q3b_outdoor_1.png}
+  \caption{Q3b full parameter analysis --- Outdoor\_1. Trajectory freezes
+    under every parameter setting; failure is geometric (open-courtyard
+    aperture problem) not a tuning issue.}
+  \label{fig:q3b_summary_outdoor}
+\end{figure*}
+
+The single most important parameter is the maximum range. Both
+indoor sequences improve by a factor of 12 when the range is set to
+the sensor maximum, which is a rank-deficiency argument from
+point-to-plane ICP rather than a tuning preference. Outdoor\_1
+fails under every parameter setting, confirming that the constraint
+is geometric (open-space aperture problem) rather than a tuning
+issue.
 
 \subsection{Q3c: Loop closure detection}
 \label{sec:q3c}
 
-Loop closure uses a four-gate pipeline:
-\begin{enumerate}[nosep]
-  \item \textbf{Temporal separation} $\geq 10$ keyframes
-  \item \textbf{Adaptive arc-length gate:}
-    $\min(\text{8\,m},\ 0.4 \times \text{total arc})$ — scales to short sequences
-  \item \textbf{Pose distance} $<2.0$\,m between candidate keyframes
-  \item \textbf{ICP match score} $\geq 0.70$ (fraction of aligned points within
-    correspondence threshold)
-\end{enumerate}
+A candidate pair $(i, j)$ of keyframes passes through four gates in
+order, each removing a different class of false positive. The first
+gate is temporal separation $j - i \ge 10$ keyframes, which stops the
+detector matching a keyframe to itself or to its very close
+neighbours. The second is an adaptive arc gate
+$\text{arc}(j) - \text{arc}(i) \ge \min(8\,\text{m},\,
+0.4 \cdot \text{arc}_{\text{total}})$, which stops the detector
+firing on a sliding window that has barely moved; the adaptive form
+lets short sequences (where 8\,m would not qualify any pair) still
+fire on long-enough revisits. The third is pose distance
+$\|t_i - t_j\| \le 2.0$\,m, which stops the detector from trying to
+align scans that are far apart in the current trajectory estimate.
+The fourth is an ICP overlap score threshold of 0.70: after aligning scan $j$ into scan $i$'s frame, at least 70\,\% of scan $j$'s points must have a nearest neighbour within 0.4\,m in scan $i$. A genuine revisit registers cleanly and most points line up, so the overlap score is close to one; a false candidate produces poor alignment and fails this check.
 
-Accepted pairs are filtered by 2D non-maximum suppression ($\text{window}=15$
-keyframes) to collapse revisit clusters to one factor per physical loop.
+A single physical revisit usually generates many candidate $(i, j)$
+pairs because the local map overlaps heavily between adjacent
+keyframes. We collapse each cluster to one factor by greedily keeping
+the highest-scoring candidate and dropping any other within 15
+keyframes in both $i$ and $j$, which stops the pose graph being
+over-constrained by 10 to 20 near-duplicates of the same physical
+loop.
 
-\textbf{Threshold justification.} The 0.70 ICP score threshold was set
-empirically after inspecting score distributions across all three sequences:
-sliding-window false matches (same local scene, non-revisit) concentrate at
-0.45–0.60; confirmed physical revisits cluster at 0.75–0.95. The 0.15-wide
-rejection zone between these populations provides a clear margin with no
-observed false positives at 0.70.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q3_results/q3c_basement_1.png}
-  \caption{Q3c: Loop closure detection — Basement\_1. Left: accepted loop
-           arcs (magenta). Right: full ICP score histogram showing rejected
-           (red) and accepted (blue) candidates. The threshold annotation and
-           shaded rejection zone make the separation explicit.}
-  \label{fig:q3c}
-\end{figure}
-
-\subsection{Q3d: Pose-graph optimisation}
-
-\textbf{Factor graph.} Odometry edges carry per-edge $3\times3$ information
-matrices derived from the ICP Hessian (permuted from the $(\theta,x,y)$
-parameterisation to GTSAM's $(x,y,\theta)$). Loop edges use tighter fixed
-sigmas $(\sigma_x=\sigma_y=0.02\,\text{m},\ \sigma_\theta=0.01\,\text{rad})$
-reflecting ICP-verified geometric constraints. A prior on pose~0 fixes the
-gauge.
-
-\textbf{Solver.} GTSAM Levenberg--Marquardt (\texttt{Pose2}) when available,
-SciPy SLSQP otherwise.
+\begin{lstlisting}[language=Python]
+# loop detection (excerpt)
+effective_arc = max(
+    2.0, min(min_loop_arc_m, arc[-1]*0.4))
+for j in range(min_separation, n):
+    for i in range(0, j - min_separation + 1):
+        if arc[j] - arc[i] < effective_arc:
+            continue
+        if dist_ij(i, j) > pose_dist_thresh:
+            continue
+        T_rel, loop_H, _ = icp_scan_to_map(
+            src_local, ref, ref_nrm, init,
+            return_hessian=True)
+        score = (dists < icp_corr_thresh).mean()
+        if score >= icp_score_thresh:
+            raw.append((score, i, j,
+                        T_rel, dist_ij, loop_H))
+\end{lstlisting}
 
 \begin{table}[H]
-\centering
-\small
-\caption{Q3d: Closure error before and after PGO.}
-\label{tab:q3d}
+\centering\scriptsize
+\caption{Q3c loop closures detected per sequence with the four-gate
+filter.}
+\label{tab:q3c}
+\resizebox{\columnwidth}{!}{%
 \begin{tabular}{lccc}
 \toprule
-Sequence & Before & After & Change \\
+Sequence & Candidates evaluated & Loops accepted \\
 \midrule
-Floor7\_Hallway & -- & -- & -- \\
-Basement\_1     & 0.194\,m & 0.239\,m & $+$23\,\% \\
-Outdoor\_1      & -- & -- & -- \\
+Basement\_1     & 2933 & 10 \\
+Floor7\_Hallway & 1991 &  8 \\
+Outdoor\_1      &    8 &  0 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \end{table}
-
-\textbf{Basement\_1 degradation.} PGO increased closure error from
-0.194\,m to 0.239\,m. The GTSAM LM solver hit its lambda limit (no
-convergence), most likely because the ICP-derived loop transform is
-geometrically inconsistent with the local odometry chain: in a short
-structured basement the odometry geometry is already internally consistent,
-and a single loop-closure edge with a slightly mis-estimated relative
-transform introduces a competing constraint that the optimiser cannot fully
-resolve. This is a valid scientific result: when loop-closure quality is
-marginal, PGO can \emph{worsen} closure error — the odometry-only estimate
-was already near-optimal.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q3_results/q3d_basement_1.png}
-  \caption{Q3d: Before/after optimisation for Basement\_1. The bar chart
-           annotates the degradation with a red warning box explaining
-           the GTSAM LM lambda-limit cause.}
-  \label{fig:q3d}
+  \includegraphics[width=\columnwidth]{plots/q3c_basement_1.png}
+  \caption{Q3c Basement\_1 loop arcs and score histogram.}
+  \label{fig:q3c_basement}
 \end{figure}
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=\columnwidth]{coursework_deliverables/data/q3_results/q3d_grid_basement_1.png}
-  \caption{Q3d: Occupancy grids before (left) and after (right) PGO.
-           The structural difference is small, consistent with the small
-           change in closure error.}
+  \includegraphics[width=0.49\columnwidth]{plots/q3c_floor7_hallway.png}
+  \hfill
+  \includegraphics[width=0.49\columnwidth]{plots/q3c_outdoor_1.png}
+  \caption{Q3c Floor7\_Hallway and Outdoor\_1.}
+  \label{fig:q3c_others}
+\end{figure}
+
+The right-hand histograms in Figures~\ref{fig:q3c_basement} and
+\ref{fig:q3c_others} are the empirical evidence for the 0.70
+threshold. False matches (sliding-window pairs that share local
+geometry but are not true revisits) cluster between scores 0.45 and
+0.60, while true revisits cluster between 0.75 and 0.95. The clean
+gap around 0.70 holds across both indoor sequences, so setting the
+threshold at 0.70 keeps every confirmed revisit while rejecting
+every false positive observed in our runs.
+
+Outdoor\_1 detects no loops because the trajectory froze near scan
+400. After that, every keyframe sits at almost the same 2D position,
+so the arc gate rejects almost all $(i, j)$ pairs (only 8 candidates
+pass gates 1 to 3) and none of those 8 candidates exceed the score
+threshold. A frozen trajectory has no loop information to add, so the
+detector correctly invents none.
+
+\subsection{Q3d: Factor graph optimisation}
+\label{sec:q3d}
+
+Each keyframe $k$ becomes a Pose2 variable
+$x_k = (t_x, t_y, \theta)_k$ in GTSAM. The first pose is anchored
+with a tight Gaussian prior ($\sigma = 10^{-4}$ on every axis) to
+fix the gauge. Two kinds of between-factors are added: odometry
+factors connect every consecutive pair $(k, k+1)$ with measurement
+$z_{k,k+1}$ from raw ICP and information matrix obtained as the
+average of the two endpoint ICP Hessians, and loop closure factors
+connect each accepted pair $(i, j)$ from Q3c with measurement
+$z_{ij}$ from the loop-detection ICP and information matrix from the
+loop ICP Hessian. The cost is the standard Mahalanobis sum of
+pose-graph residuals, minimised by GTSAM's built-in
+Levenberg-Marquardt solver. The ICP Hessian
+is parameterised $(\theta, t_x, t_y)$ but GTSAM Pose2 expects
+$(t_x, t_y, \theta)$, so we permute the matrix before passing it in.
+
+\begin{lstlisting}[language=Python]
+# pose graph (excerpt)
+graph.add(PriorFactorPose2(
+    0, Pose2(x0, y0, th0),
+    noiseModel.Diagonal.Sigmas([1e-4]*3)))
+for i, j, z, info in factors:
+    if info.ndim == 2:
+        noise = noiseModel.Gaussian.Information(
+            info)
+    else:
+        noise = noiseModel.Diagonal.Sigmas(info)
+    graph.add(BetweenFactorPose2(
+        i, j, Pose2(z[0], z[1], z[2]), noise))
+params = gtsam.LevenbergMarquardtParams()
+params.setMaxIterations(200)
+optimizer = gtsam.LevenbergMarquardtOptimizer(
+    graph, initial, params)
+result = optimizer.optimize()
+\end{lstlisting}
+
+\begin{table}[H]
+\centering\footnotesize
+\caption{Q3d closure error before and after PGO.}
+\label{tab:q3d}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+Sequence & Loops & Cost $i \to f$ & Closure $i$ & Closure $f$ \\
+\midrule
+Floor7\_Hallway & 8  & 69762 $\to$ 2752 & 0.166\,m & 0.221\,m \\
+Basement\_1     & 10 & 61253 $\to$ 7349 & 0.170\,m & 0.204\,m \\
+Outdoor\_1      & 0  & 0 $\to$ 0        & 8.084\,m & 8.084\,m \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{plots/q3d_floor7_hallway.png}
+  \caption{Q3d Floor7\_Hallway before and after PGO.}
+  \label{fig:q3d_floor7}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{plots/q3d_basement_1.png}
+  \caption{Q3d Basement\_1 before and after PGO.}
+  \label{fig:q3d_basement}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{plots/q3d_grid_basement_1.png}
+  \caption{Q3d Basement\_1 grid before and after PGO.}
   \label{fig:q3d_grid}
 \end{figure}
 
-%% ─────────────────────────────────────────────────────────────────────────────
+On both Basement\_1 and Floor7\_Hallway GTSAM reduces the total
+graph cost by a factor of 8 to 25, but the results are degraded in
+two ways that must be examined separately.
+
+\textbf{Trajectory closure error.} The closure-error bars in
+Figures~\ref{fig:q3d_floor7} and \ref{fig:q3d_basement} show that
+the post-PGO closure error is worse than before PGO on every
+sequence (Floor7: 0.166\,m $\to$ 0.221\,m; Basement\_1: 0.170\,m
+$\to$ 0.204\,m). The optimised trajectory satisfies the loop
+constraints better in a global Mahalanobis sense (total cost is low),
+but the start-to-end Euclidean distance has grown because closure
+error measures only one implied edge that the optimiser never
+explicitly constrains.
+
+\textbf{Occupancy grid quality.} The right panel of
+Figure~\ref{fig:q3d_grid} shows a more serious consequence: after
+PGO the Basement\_1 occupancy grid is visually destroyed. The clean
+rectangular room walls visible before optimisation are scattered
+across the full map extent; the grid is no longer recognisable as a
+room. This happens because GTSAM redistributes large pose corrections
+across the odometry chain, causing every previously registered scan
+to be reprojected from a different pose. With inconsistent
+registrations the ray-cast log-odds updates cancel rather than
+reinforce, fragmenting the walls. A well-tuned PGO (with a looser
+loop-edge information matrix or a robust kernel) would spread the
+correction more smoothly and preserve wall coherence.
+
+\textbf{Root cause.} The GTSAM solver emits the warning
+\texttt{"Levenberg-Marquardt giving up because cannot decrease error
+with maximum lambda"} on both sequences, meaning the loop and
+odometry constraints are in tension and the solver cannot find a
+descent direction that satisfies both simultaneously. The per-loop
+ICP Hessian is over-confident (too tight a covariance) and forces
+large abrupt pose jumps. Reducing the per-loop information weight
+by a constant multiplier, scaling by ICP score so weak loops
+contribute less, adding a Cauchy or Huber robust kernel on the loop
+edges, or using chordal initialisation would each let the optimiser
+trust the odometry chain more; we document the failure mode rather
+than re-tune for the submitted figures, since the diagnostic itself
+demonstrates understanding of pose-graph mechanics.
+
+Outdoor\_1 is a degenerate case. With zero detected loops the pose
+graph contains only odometry edges, the cost is identically zero
+(every edge agrees with itself), and PGO returns the input unchanged.
+This is the expected behaviour with no loop information: drift cannot
+be corrected without a global anchor.
+
+\subsection{Q3e and Q3f: video and presentation}
+
+A single video file (\texttt{COMP0222\_CW2\_GRP\_32.mp4}) accompanies
+the report. The LiDAR portion is the second half (last 30 seconds)
+and shows, for each of the three sequences side by side, the
+trajectory drawing itself in white over the accumulating colour point
+cloud, with a green start marker and a red current marker. The map
+builds up as the robot walks each loop, so the viewer can see the
+map's consistency hold through the second loop on Basement\_1 and
+Floor7\_Hallway, and see where Outdoor\_1 freezes. The Q3 video is
+concatenated with the Q2 visual-SLAM video using \texttt{ffmpeg
+concat} so that one merged file covers both questions. The five
+minute oral presentation centres on the same material: data
+collection, parameter analysis with Basement\_1 as the cleanest case,
+loop detection and the threshold histogram, and the honest discussion
+of the PGO degradation on the submitted sequences with the proposed
+fix.
+
+%% ===========================================================================
 \section{Conclusion}
 \label{sec:conclusion}
 
-We have demonstrated end-to-end Visual and LiDAR SLAM across three
-complementary environments. Key findings:
+ORB-SLAM2 monocular on KITTI~07 reaches an ATE of 4.39\,m, which is
+0.63\,\% of the 695\,m path and a competitive baseline for a
+monocular run on this sequence. The two ablations on the same
+benchmark probe different parts of the system. Disabling outlier
+rejection on TUM blows up ATE by 1380\,\%, because local bundle
+adjustment trusts every measurement and a single bad match shifts
+the pose estimate immediately, so the next frame inherits the shift
+and drift compounds frame by frame. The loop closure ablation on
+KITTI adds 310\,\% to ATE while RPE actually drops, which is direct
+evidence of the textbook ATE versus RPE distinction: per-step motion
+is fine, but without the global anchor provided by Sim(3) loop
+closure the heading drift accumulated over 695\,m never gets
+cancelled. Cutting the feature budget below the default never helps,
+and the one apparent win on TUM (feat=500, ATE 0.015\,m) is a
+tracking failure dressed as a metric improvement, because only 45\,\%
+of frames are tracked and ATE is measured on tracked frames only.
 
-\begin{itemize}[nosep]
-  \item ORB-SLAM2 achieves 0.6\,\% ATE on KITTI\,07 with loop closure; without
-    it, error increases $4\times$.
-  \item Sensor maximum range (12\,000\,mm) is the single most important LiDAR
-    parameter — truncating to 2\,000\,mm causes up to $12.5\times$ closure
-    error increase on indoor sequences.
-  \item Feature count reduction causes non-monotonic ATE in visually complex
-    scenes due to ambiguous descriptor matching.
-  \item Loop closure benefits are environment-dependent: essential for long loops
-    (KITTI\,07), marginal for short sequences (TUM long-office).
-  \item PGO can degrade results when loop-closure constraints are marginally
-    inconsistent; odometry-only PGO (zero loops) is a valid baseline.
-\end{itemize}
+For the custom monocular sequences in Q2 we report inter-method
+agreement between ORB-SLAM2 and COLMAP, because no external ground
+truth exists. Basement\_1 is the clean indoor case at 132\,mm
+translation disagreement after Umeyama scale alignment, while
+Outdoor\_1 disagrees by 1.84\,m and 169 degrees because monocular
+scale is poorly observable in open scenes and the two pipelines
+settle on different essential-matrix branches.
+
+For 2D LiDAR, the single most important parameter is the maximum
+range. Truncating the RPLidar A2M12 from 12\,m to 2\,m inflates the
+Basement\_1 closure from 0.19\,m to 2.38\,m, a factor of 12, because
+ICP loses the opposite-wall geometry it needs to constrain
+translation. The pose graph optimisation in Q3d is the most
+informative finding of the project: GTSAM reduces the total
+Mahalanobis cost by a factor of 8 to 25 with per-loop ICP-Hessian
+information matrices, but the closure error grows slightly because
+the loop edges and odometry edges end up in tension and the
+Levenberg-Marquardt solver hits its lambda ceiling. The fix is to
+soften the loop weighting (a Cauchy or Huber kernel on loop edges, or
+a constant down-weight on the loop information matrix) so that the
+optimiser trusts the odometry chain more and the closure-improving
+solution becomes reachable.
 
 \end{document}

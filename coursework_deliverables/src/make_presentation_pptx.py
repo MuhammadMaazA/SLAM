@@ -227,7 +227,7 @@ title_bar(sl, 'Q3 — LiDAR SLAM with Own Sequences',
           'Data Collection  ·  ICP Odometry  ·  Loop Closure  ·  Factor Graph')
 
 card(sl, 0.2, 1.35, 4.1, 2.75, 'Data Collection', [
-    'RPLidar A1M8 (max range 12000 mm)',
+    'RPLidar A2M12 (max range 12000 mm)',
     '2 indoor + 1 outdoor sequences',
     'Basement_1  —  indoor',
     'Floor7_Hallway  —  large (Marshgate)',

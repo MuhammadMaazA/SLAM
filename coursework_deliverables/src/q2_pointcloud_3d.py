@@ -23,7 +23,7 @@ _ROOT   = os.path.abspath(os.path.join(_HERE, '..'))
 BASE    = os.environ.get('SLAM_DATA', os.path.join(_ROOT, 'data'))
 COLMAP  = os.path.join(BASE, 'q2_results', 'colmap_runs')
 ORB_DIR = os.path.join(BASE, 'q2_results', 'orbslam_runs')
-OUT_DIR = os.path.join(BASE, 'q2_results', 'pointclouds_3d')
+OUT_DIR = os.path.abspath(os.path.join(_ROOT, '..', 'plots'))
 os.makedirs(OUT_DIR, exist_ok=True)
 
 

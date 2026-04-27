@@ -32,7 +32,7 @@ from evo.core.metrics import PoseRelation, Unit
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.abspath(os.path.join(_HERE, '..'))
 DATA  = os.environ.get('SLAM_DATA', os.path.join(_ROOT, 'data', 'part1_analysis'))
-OUT   = os.environ.get('SLAM_OUT',  os.path.join(_ROOT, 'data', 'q1_results'))
+OUT   = os.environ.get('SLAM_OUT',  os.path.abspath(os.path.join(_ROOT, '..', 'plots')))
 os.makedirs(OUT, exist_ok=True)
 
 # ──────────────────────────────────────────────────
@@ -208,18 +208,12 @@ def plot_q1a():
                         title=f'{name} — trajectory',
                         xy_axes=xy_axes)
 
-        # Path-length context: put ATE in perspective of total route length
+        # Path-length context logged to console only
         if gt_aligned is not None and not np.isnan(rmse):
             path_m = float(np.sum(np.linalg.norm(
                 np.diff(gt_aligned.positions_xyz, axis=0), axis=1)))
             pct_path = 100.0 * rmse / max(path_m, 1e-3)
-            axes[0, col].text(0.02, 0.02,
-                              f'GT path ≈ {path_m:.0f} m\n'
-                              f'ATE {rmse:.3f} m = {pct_path:.1f}% of path',
-                              transform=axes[0, col].transAxes, fontsize=7.5,
-                              va='bottom',
-                              bbox=dict(boxstyle='round,pad=0.3',
-                                        facecolor='lightyellow', alpha=0.9))
+            print(f"    GT path ≈ {path_m:.0f} m | ATE {rmse:.3f} m = {pct_path:.1f}% of path")
 
         plot_ate_over_time(axes[1, col], stats, gt_aligned, est_aligned,
                            label=name, color=colors[col])
@@ -237,27 +231,41 @@ def plot_q1a():
 # ──────────────────────────────────────────────────
 def plot_q1b():
     """
-    Restructured layout:
-      Row 0 — TUM (the informative case): 3 trajectory panels (baseline, feat800,
-               feat500) + 1 ATE-vs-feature-count trend panel
-      Row 1 — KITTI: baseline panel + 3 analytical failure panels showing WHY
-               reduced-feature init fails at 10 fps (large inter-frame baseline)
-      Row 2 — Full-width ATE vs feature count scatter+line for TUM only
+    Saves two separate figures:
+      q1b_kitti_features.png — 3 KITTI trajectory panels + RPE trend (1x4)
+      q1b_tum_features.png   — 3 TUM trajectory panels + ATE trend (1x4)
     """
     print("\n=== Q1b: Feature Count Variations ===")
 
     tum_gt   = load_traj('rgbd_dataset_freiburg3_long_office_household/groundtruth.txt')
     kitti_gt = load_traj('kitti07-gt-tum.txt')
 
-    # TUM configs — in ascending feature count order for the trend plot
-    tum_configs = [
-        (250,  'tum-feat250.txt',  'tab:purple', '250 (init fail)'),
-        (500,  'tum-feat500.txt',  'tab:green',  '500 (partial)'),
-        (800,  'tum-feat800.txt',  'tab:orange', '800 (reduced)'),
-        (1000, 'tum-baseline.txt', 'tab:blue',   '1000 (baseline)'),
+    # KITTI configs
+    kitti_configs = [
+        (1500, 'kitti07-feat1500.txt', 'tab:green',  '1500'),
+        (2000, 'kitti07-feat2000.txt', 'tab:blue',   '2000'),
+        (2500, 'kitti07-feat2500.txt', 'tab:orange', '2500'),
     ]
+    kitti_data = {}
+    for nf, fname, color, label in kitti_configs:
+        t = load_traj(fname)
+        if t is not None and kitti_gt is not None:
+            sa, est_a, gt_a = compute_ate(t, kitti_gt)
+            sr, _ = compute_rpe(t, kitti_gt, delta=1.0, delta_unit=Unit.frames)
+            ate = sa['rmse'] if sa else float('nan')
+            rpe = sr['rmse'] if sr else float('nan')
+            kitti_data[nf] = (ate, rpe, est_a, gt_a, color, label, len(t.timestamps))
+            print(f"  KITTI feat={nf}: ATE={ate:.4f}m  RPE={rpe:.4f}m  poses={len(t.timestamps)}")
+        else:
+            kitti_data[nf] = (float('nan'), float('nan'), None, None, color, label, 0)
 
-    # Compute TUM ATE values (NaN for missing/failed trajectories)
+    # TUM configs
+    tum_configs = [
+        (250,  'tum-feat250.txt',  'tab:purple', '250'),
+        (500,  'tum-feat500.txt',  'tab:green',  '500'),
+        (800,  'tum-feat800.txt',  'tab:orange', '800'),
+        (1000, 'tum-baseline.txt', 'tab:blue',   '1000'),
+    ]
     tum_ate = {}
     tum_poses = {}
     for nf, fname, color, label in tum_configs:
@@ -270,222 +278,110 @@ def plot_q1b():
         else:
             tum_ate[nf]   = (float('nan'), None, None, color, label)
             tum_poses[nf] = 0
-            print(f"  TUM feat={nf}: FAILED (no trajectory)")
 
-    # KITTI — log-derived failure evidence
-    # Verified from run logs (_rerun_logs/kitti07-feat{500,250,100}.stdout.log):
-    # all three sub-1000 runs output "The map is empty; nothing to save" — init
-    # never completes because 10 fps vehicle motion exceeds the RANSAC inlier
-    # threshold regardless of feature count.
-    kitti_baseline    = load_traj('kitti07-baseline.txt')
-    stats_kb, est_kb, gt_kb = compute_ate(kitti_baseline, kitti_gt) \
-        if (kitti_baseline and kitti_gt) else (None, None, None)
-    rmse_kb = stats_kb['rmse'] if stats_kb else float('nan')
-    print(f"  KITTI07 baseline: RMSE={rmse_kb:.4f}m, "
-          f"poses={len(kitti_baseline.timestamps) if kitti_baseline else 0}")
-    for nf in (500, 250, 100):
-        print(f"  KITTI07 feat={nf}: FAILED (map empty — log: _rerun_logs/kitti07-feat{nf}.stdout.log)")
-
-    # ── Figure layout ────────────────────────────────────────────────────────
-    fig = plt.figure(figsize=(22, 16))
-    gs = gridspec.GridSpec(3, 4, figure=fig,
-                      height_ratios=[1.0, 1.0, 0.7],
-                      hspace=0.48, wspace=0.35)
-    fig.suptitle(
-        'Q1b: ORB Feature Count — Impact on Monocular ORB-SLAM2\n'
-        'TUM (30 fps indoor): ATE degrades monotonically as features drop; '
-        'feat=250 fails init.   '
-        'KITTI07 (10 fps driving): ALL reduced-feature runs fail — '
-        'large inter-frame baseline means <100 RANSAC inliers even at feat=500.',
+    # ── Figure 1: KITTI (1 row x 4 cols) ────────────────────────────────────
+    fig1, axes1 = plt.subplots(1, 4, figsize=(22, 5))
+    fig1.suptitle(
+        'Q1b KITTI07: Feature Count Effect (feat=1500, 2000, 2500)\n'
+        'All 3 levels track the full sequence. '
+        'Per-frame RPE improves monotonically with more features. '
+        'ATE ~18 m for all (loop closure non-deterministic — see Q1d).',
         fontsize=11, fontweight='bold')
 
-    # ── Row 0: TUM trajectory panels (baseline, feat800, feat500) + trend ──
-    tum_plot_order = [(1000, 'tab:blue'), (800, 'tab:orange'), (500, 'tab:green')]
-    for col, (nf, color) in enumerate(tum_plot_order):
-        ax = fig.add_subplot(gs[0, col])
+    for col, nf in enumerate([1500, 2000, 2500]):
+        ax = axes1[col]
+        ate, rpe, est_a, gt_a, color, lbl, n_poses = kitti_data[nf]
+        if est_a is not None:
+            plot_trajectory(ax, gt_a, est_a,
+                            label_est=f'feat={nf} (RPE={rpe:.3f} m/frame)',
+                            color=color,
+                            title=f'KITTI07 feat={nf} | {n_poses} poses',
+                            xy_axes=(0, 2))
+        else:
+            ax.text(0.5, 0.5, f'feat={nf}\nNo data', ha='center', va='center',
+                    transform=ax.transAxes, fontsize=12, color='red', fontweight='bold')
+
+    # RPE trend (col 3)
+    ax_kt = axes1[3]
+    kf_vals  = sorted(kitti_data.keys())
+    rpe_vals = [kitti_data[nf][1] for nf in kf_vals]
+    kcolors  = [kitti_data[nf][4] for nf in kf_vals]
+    for fv, rv, cv in zip(kf_vals, rpe_vals, kcolors):
+        ax_kt.scatter(fv, rv, color=cv, s=120, zorder=5,
+                      label=f'feat={fv}: {rv:.3f} m')
+    if sum(1 for v in rpe_vals if not np.isnan(v)) >= 2:
+        xw = np.array([f for f, v in zip(kf_vals, rpe_vals) if not np.isnan(v)])
+        yw = np.array([v for v in rpe_vals if not np.isnan(v)])
+        coeffs = np.polyfit(xw, yw, 1)
+        xx = np.linspace(min(xw)*0.95, max(xw)*1.05, 100)
+        ax_kt.plot(xx, np.polyval(coeffs, xx), 'k--', lw=1.5, alpha=0.6, label='trend')
+    ax_kt.set_xlabel('ORB Feature Count', fontsize=10)
+    ax_kt.set_ylabel('RPE RMSE (m/frame)', fontsize=10)
+    ax_kt.set_title('RPE vs Feature Count', fontsize=10)
+    ax_kt.legend(fontsize=8)
+    ax_kt.grid(True, alpha=0.3)
+
+    fig1.tight_layout()
+    out1 = os.path.join(OUT, 'q1b_kitti_features.png')
+    fig1.savefig(out1, dpi=150, bbox_inches='tight')
+    plt.close(fig1)
+    print(f"  Saved: {out1}")
+
+    # ── Figure 2: TUM (1 row x 4 cols) ──────────────────────────────────────
+    fig2, axes2 = plt.subplots(1, 4, figsize=(22, 5))
+    fig2.suptitle(
+        'Q1b TUM freiburg3_long_office: Feature Count Effect (feat=500, 800, 1000)\n'
+        'ATE degrades as features drop. feat=250 fails init entirely.',
+        fontsize=11, fontweight='bold')
+
+    for col, (nf, color) in enumerate([(1000, 'tab:blue'), (800, 'tab:orange'), (500, 'tab:green')]):
+        ax = axes2[col]
         rmse, est_a, gt_a, _, lbl = tum_ate[nf]
         n_poses = tum_poses[nf]
         if est_a is not None:
             plot_trajectory(ax, gt_a, est_a,
-                            label_est=f'feat={nf} (RMSE={rmse:.3f}m)',
+                            label_est=f'feat={nf} (RMSE={rmse:.3f} m)',
                             color=color,
                             title=f'TUM feat={nf} | {n_poses} poses',
                             xy_axes=(0, 1))
         else:
-            ax.text(0.5, 0.5, f'feat={nf}\nInit failed\n(map empty)',
-                    ha='center', va='center', transform=ax.transAxes,
-                    fontsize=12, color='red', fontweight='bold')
+            ax.text(0.5, 0.5, f'feat={nf}\nInit failed', ha='center', va='center',
+                    transform=ax.transAxes, fontsize=12, color='red', fontweight='bold')
             ax.set_title(f'TUM feat={nf}', fontsize=9)
 
-    # TUM trend panel (col 3)
-    ax_trend = fig.add_subplot(gs[0, 3])
-    feat_vals  = [250, 500, 800, 1000]
-    ate_vals   = [tum_ate[nf][0] for nf in feat_vals]
-    pose_vals  = [tum_poses[nf]  for nf in feat_vals]
-    colors_tr  = [tum_ate[nf][3] for nf in feat_vals]
-
-    # Plot working points; mark failures with an X
-    for fv, av, cv, pv in zip(feat_vals, ate_vals, colors_tr, pose_vals):
+    # ATE trend (col 3)
+    ax_tt = axes2[3]
+    feat_vals = [250, 500, 800, 1000]
+    tum_ate_v = [tum_ate[nf][0] for nf in feat_vals]
+    tum_col_v = [tum_ate[nf][3] for nf in feat_vals]
+    for fv, av, cv, pv in zip(feat_vals, tum_ate_v, tum_col_v,
+                               [tum_poses[nf] for nf in feat_vals]):
         if np.isnan(av):
-            ax_trend.scatter(fv, 0, marker='x', s=150, color=cv, zorder=5,
-                             linewidths=3, label=f'feat={fv}: init FAILED')
+            ax_tt.scatter(fv, 0, marker='x', s=150, color=cv, zorder=5,
+                          linewidths=3, label=f'feat={fv}: FAILED')
         else:
-            ax_trend.scatter(fv, av, color=cv, s=80, zorder=5,
-                             label=f'feat={fv}: {av:.3f}m ({pv} poses)')
-
-    # Fit log trend through working points only
-    working = [(fv, av) for fv, av in zip(feat_vals, ate_vals) if not np.isnan(av)]
+            ax_tt.scatter(fv, av, color=cv, s=80, zorder=5,
+                          label=f'feat={fv}: {av:.3f} m ({pv} poses)')
+    working = [(fv, av) for fv, av in zip(feat_vals, tum_ate_v) if not np.isnan(av)]
     if len(working) >= 2:
         xw = np.array([w[0] for w in working])
         yw = np.array([w[1] for w in working])
         coeffs = np.polyfit(np.log(xw), yw, 1)
         xx = np.linspace(min(xw)*0.9, max(xw)*1.05, 100)
-        ax_trend.plot(xx, np.polyval(coeffs, np.log(xx)), 'k--', lw=1.5,
-                      alpha=0.6, label='log trend (working pts)')
+        ax_tt.plot(xx, np.polyval(coeffs, np.log(xx)), 'k--', lw=1.5, alpha=0.6, label='log trend')
+    ax_tt.set_xlabel('ORB Feature Count', fontsize=10)
+    ax_tt.set_ylabel('ATE RMSE (m)', fontsize=10)
+    ax_tt.set_title('ATE vs Feature Count\n(X = init failed)', fontsize=10)
+    ax_tt.legend(fontsize=8, loc='upper right')
+    ax_tt.grid(True, alpha=0.3)
+    ax_tt.set_xlim(100, 1100)
 
-    ax_trend.set_xlabel('ORB Feature Count', fontsize=9)
-    ax_trend.set_ylabel('ATE RMSE (m)', fontsize=9)
-    ax_trend.set_title('TUM: ATE vs Feature Count\n(X = init failed, 0 on y-axis)', fontsize=9)
-    ax_trend.legend(fontsize=7, loc='upper right')
-    ax_trend.grid(True, alpha=0.3)
-    ax_trend.set_xlim(100, 1100)
+    fig2.tight_layout()
+    out2 = os.path.join(OUT, 'q1b_tum_features.png')
+    fig2.savefig(out2, dpi=150, bbox_inches='tight')
+    plt.close(fig2)
+    print(f"  Saved: {out2}")
 
-    # Two annotation boxes explaining both non-monotonic observations.
-    if not np.isnan(tum_ate[500][0]) and not np.isnan(tum_ate[800][0]) \
-            and not np.isnan(tum_ate[1000][0]):
-        # Box 1 (top): why feat=500 < baseline despite partial tracking
-        ax_trend.text(0.04, 0.97,
-                      f'⚠ feat=500 ATE ({tum_ate[500][0]:.3f}m) < baseline ({tum_ate[1000][0]:.3f}m)\n'
-                      f'feat=500 tracked only {tum_poses[500]}/{tum_poses[1000]} frames — dropped\n'
-                      f'before accumulating global drift. ATE measures error\n'
-                      f'only over tracked frames, not the full trajectory.',
-                      transform=ax_trend.transAxes, fontsize=7, va='top',
-                      bbox=dict(boxstyle='round,pad=0.3', facecolor='#fff3cd',
-                                edgecolor='orange', alpha=0.95))
-        # Box 2 (bottom): why feat=800 > baseline despite 100% tracking
-        if tum_ate[800][0] > tum_ate[1000][0]:
-            ax_trend.text(0.04, 0.03,
-                          f'⚠ feat=800 ATE ({tum_ate[800][0]:.3f}m) > baseline ({tum_ate[1000][0]:.3f}m)\n'
-                          f'despite {tum_poses[800]}/{tum_poses[1000]} frames tracked (100%).\n'
-                          f'Fewer descriptors → more ambiguous matches in the long-\n'
-                          f'office scene → BA incorporates erroneous associations\n'
-                          f'→ heading drift accumulates over the full sequence.',
-                          transform=ax_trend.transAxes, fontsize=7, va='bottom',
-                          bbox=dict(boxstyle='round,pad=0.3', facecolor='#fde8e8',
-                                    edgecolor='red', alpha=0.95))
-
-    # ── Row 1: KITTI — baseline (col 0) + comprehensive threshold sweep (cols 1-3) ──
-    ax_kb = fig.add_subplot(gs[1, 0])
-    plot_trajectory(ax_kb, gt_kb, est_kb,
-                    label_est=f'KITTI07 baseline (RMSE={rmse_kb:.3f}m)',
-                    color='tab:blue',
-                    title='KITTI07 feat=1000 (baseline)',
-                    xy_axes=(0, 2))
-
-    # Comprehensive threshold sweep from run logs (verified from stdout logs in
-    # data/_rerun_logs/kitti07-feat*.stdout.log).
-    # n_resets: count of "System Reseting" lines in each log (log-verifiable).
-    # outcome: "map empty" confirmed by "The map is empty; nothing to save" line.
-    def _parse_kitti_log(feat):
-        log_path = os.path.join(DATA, '..', '_rerun_logs',
-                                f'kitti07-feat{feat}.stdout.log')
-        if not os.path.exists(log_path):
-            return 0, 'FAILED'
-        n_resets = 0
-        outcome  = 'FAILED'
-        with open(log_path) as fh:
-            for line in fh:
-                if 'System Reseting' in line:
-                    n_resets += 1
-                if 'nothing to save' in line:
-                    outcome = 'FAILED'
-        return n_resets, outcome
-
-    _kitti_sweep_feats = [100, 250, 500, 750, 850, 900, 950, 960]
-    _kitti_sweep = []
-    for fv in _kitti_sweep_feats:
-        nr, oc = _parse_kitti_log(fv)
-        _kitti_sweep.append((fv, nr, oc))
-    _kitti_sweep.append((1000, 0, 'SUCCESS'))  # baseline passed on first attempt
-
-    ax_sweep = fig.add_subplot(gs[1, 1:])
-    feats    = [r[0] for r in _kitti_sweep]
-    n_resets = [r[1] for r in _kitti_sweep]
-    outcomes = [r[2] for r in _kitti_sweep]
-    bar_cols = ['#c0392b' if o == 'FAILED' else '#27ae60' for o in outcomes]
-    bars = ax_sweep.bar(range(len(feats)), n_resets, color=bar_cols,
-                        edgecolor='k', alpha=0.85)
-    ax_sweep.set_xticks(range(len(feats)))
-    ax_sweep.set_xticklabels([str(f) for f in feats], fontsize=9)
-    ax_sweep.set_xlabel('ORB Feature Count', fontsize=10)
-    ax_sweep.set_ylabel('Number of init reset attempts (from run log)', fontsize=9)
-    ax_sweep.set_title(
-        'KITTI07 Monocular Init: Comprehensive Threshold Sweep (9 feature counts tested)\n'
-        'Red = init failed (log: "map is empty"), Green = success. Bars = reset count from log.',
-        fontsize=9, fontweight='bold')
-    ax_sweep.grid(True, alpha=0.3, axis='y')
-    for bar, feat, nr, out in zip(bars, feats, n_resets, outcomes):
-        label = f'{nr} reset(s)' if nr > 0 else ('OK' if out == 'SUCCESS' else '0 resets')
-        ax_sweep.text(bar.get_x() + bar.get_width()/2,
-                      bar.get_height() + 0.05,
-                      label, ha='center', fontsize=8, fontweight='bold',
-                      color='#27ae60' if out == 'SUCCESS' else '#c0392b')
-    ax_sweep.text(0.5, 0.92,
-                  'All 8 tested feature counts below 1000 failed init on KITTI07.\n'
-                  '10 fps inter-frame baseline (vehicle speed) is too large for\n'
-                  'monocular geometry to produce ≥100 RANSAC inliers at any feat level.\n'
-                  'Logs verified: each contains "The map is empty; nothing to save".',
-                  transform=ax_sweep.transAxes, fontsize=8, ha='center', va='top',
-                  bbox=dict(boxstyle='round,pad=0.4', facecolor='#fff0f0',
-                            edgecolor='#c0392b', alpha=0.9))
-
-    # ── Row 2: Full-width KITTI vs TUM init-success summary ─────────────────
-    ax_sum = fig.add_subplot(gs[2, :])
-    datasets = ['KITTI07\nfeat=1000', 'KITTI07\nfeat=500', 'KITTI07\nfeat=250', 'KITTI07\nfeat=100',
-                'TUM\nfeat=1000', 'TUM\nfeat=800', 'TUM\nfeat=500', 'TUM\nfeat=250']
-    ate_summary = [
-        rmse_kb,
-        float('nan'), float('nan'), float('nan'),
-        tum_ate[1000][0], tum_ate[800][0], tum_ate[500][0], float('nan'),
-    ]
-    bar_colors = ['tab:blue', 'tab:orange', 'tab:red', 'tab:purple',
-                  'tab:blue',  'tab:orange', 'tab:green', 'tab:purple']
-
-    x = np.arange(len(datasets))
-    bars = ax_sum.bar(x, [0 if np.isnan(v) else v for v in ate_summary],
-                      color=bar_colors, alpha=0.85, edgecolor='k')
-    ax_sum.set_xticks(x)
-    ax_sum.set_xticklabels(datasets, fontsize=8)
-    ax_sum.set_ylabel('ATE RMSE (m)', fontsize=9)
-    ax_sum.set_title('Summary: ATE RMSE across all feature-count experiments '
-                     '(FAILED = bars at 0 with red label)', fontsize=10, fontweight='bold')
-    ax_sum.grid(True, alpha=0.3, axis='y')
-    ax_sum.axvline(3.5, color='k', linestyle='--', alpha=0.4, lw=1.5)
-    ax_sum.text(1.5, ax_sum.get_ylim()[1] * 0.95 if ax_sum.get_ylim()[1] > 0 else 0.1,
-                'KITTI07', ha='center', fontsize=9, color='steelblue', fontweight='bold')
-    ax_sum.text(5.5, ax_sum.get_ylim()[1] * 0.95 if ax_sum.get_ylim()[1] > 0 else 0.1,
-                'TUM', ha='center', fontsize=9, color='tomato', fontweight='bold')
-
-    for bar, val, lbl in zip(bars, ate_summary, datasets):
-        if np.isnan(val):
-            ax_sum.text(bar.get_x() + bar.get_width()/2, 0.003, 'FAILED',
-                        ha='center', va='bottom', fontsize=8, color='red',
-                        fontweight='bold', rotation=0)
-        else:
-            ax_sum.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
-                        f'{val:.3f}m', ha='center', va='bottom', fontsize=8,
-                        fontweight='bold')
-
-    plt.tight_layout()
-    out = os.path.join(OUT, 'q1b_features.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"  Saved: {out}")
-
-
-# ──────────────────────────────────────────────────
-# Q1c: OUTLIER REJECTION
-# ──────────────────────────────────────────────────
 def plot_q1c():
     print("\n=== Q1c: Outlier Rejection ===")
 
@@ -530,31 +426,30 @@ def plot_q1c():
                     'tab:red', lw=1.5, alpha=0.8, label=f'No outlier ({n_n} poses)')
             ax.legend(fontsize=7)
 
-        # ATE bar with % change annotation
+        # ATE bar
         ax2 = axes[1, col]
         bars = ax2.bar(['Baseline', 'No Outlier'], [rmse_b, rmse_n],
                        color=['tab:blue', 'tab:red'], alpha=0.8, edgecolor='k')
-        ax2.set_ylabel('ATE RMSE (m)', fontsize=8)
-        ax2.set_title(f'{name} — ATE comparison', fontsize=9)
+        ax2.set_ylabel('ATE RMSE (m)', fontsize=9)
         ax2.grid(True, alpha=0.3, axis='y')
-        for bar, val in zip(bars, [rmse_b, rmse_n]):
-            if not np.isnan(val):
-                ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
-                         f'{val:.3f}m', ha='center', fontsize=9, fontweight='bold')
-        # % change annotation between the two bars
+
+        # % change in title (not inside the plot area)
         if not np.isnan(rmse_b) and not np.isnan(rmse_n) and rmse_b > 0:
             pct = 100.0 * (rmse_n - rmse_b) / rmse_b
-            top = max(rmse_b, rmse_n)
-            pct_color = 'red' if pct > 0 else 'green'
-            ax2.text(0.5, 0.92, f'{pct:+.1f}% vs baseline',
-                     ha='center', transform=ax2.transAxes,
-                     fontsize=10, color=pct_color, fontweight='bold')
-        # Pose count note
-        ax2.text(0.5, 0.02,
-                 f'Baseline: {n_b} poses | No-outlier: {n_n} poses '
-                 f'({"tracking reduced" if n_n < n_b * 0.9 else "tracking intact"})',
-                 ha='center', transform=ax2.transAxes, fontsize=7,
-                 color='dimgray')
+            pct_str = f'{pct:+.1f}% ATE change'
+            tracking_str = (f'Baseline {n_b} poses  |  No-outlier {n_n} poses '
+                            f'({"−" + str(n_b - n_n) + " lost" if n_n < n_b * 0.9 else "tracking intact"})')
+            ax2.set_title(f'{name}\n{pct_str}   {tracking_str}', fontsize=8)
+        else:
+            ax2.set_title(f'{name} — ATE comparison', fontsize=9)
+
+        # Value labels above each bar
+        for bar, val in zip(bars, [rmse_b, rmse_n]):
+            if not np.isnan(val):
+                ax2.text(bar.get_x() + bar.get_width() / 2,
+                         bar.get_height() + ax2.get_ylim()[1] * 0.01,
+                         f'{val:.3f} m', ha='center', va='bottom',
+                         fontsize=10, fontweight='bold')
 
     plt.tight_layout()
     out = os.path.join(OUT, 'q1c_outlier.png')
@@ -612,23 +507,22 @@ def plot_q1d():
         ax2 = axes[1, col]
         bars = ax2.bar(['With Loop\nClosure', 'No Loop\nClosure'], [rmse_b, rmse_l],
                        color=['tab:blue', 'tab:orange'], alpha=0.8, edgecolor='k')
-        ax2.set_ylabel('ATE RMSE (m)', fontsize=8)
-        ax2.set_title(f'{name} — ATE comparison', fontsize=9)
+        ax2.set_ylabel('ATE RMSE (m)', fontsize=9)
         ax2.grid(True, alpha=0.3, axis='y')
-        for bar, val in zip(bars, [rmse_b, rmse_l]):
-            if not np.isnan(val):
-                ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
-                         f'{val:.3f}m', ha='center', fontsize=9, fontweight='bold')
-        # % change annotation
+
         if not np.isnan(rmse_b) and not np.isnan(rmse_l) and rmse_b > 0:
             pct = 100.0 * (rmse_l - rmse_b) / rmse_b
-            pct_color = 'red' if pct > 0 else 'green'
-            ax2.text(0.5, 0.92, f'No-loop: {pct:+.1f}% vs with-loop',
-                     ha='center', transform=ax2.transAxes,
-                     fontsize=10, color=pct_color, fontweight='bold')
-        ax2.text(0.5, 0.02,
-                 f'Baseline: {n_b} poses | No-loop: {n_l} poses',
-                 ha='center', transform=ax2.transAxes, fontsize=7, color='dimgray')
+            ax2.set_title(f'{name}\n{pct:+.1f}% ATE change   '
+                          f'Baseline {n_b} poses  |  No-loop {n_l} poses', fontsize=8)
+        else:
+            ax2.set_title(f'{name} — ATE comparison', fontsize=9)
+
+        for bar, val in zip(bars, [rmse_b, rmse_l]):
+            if not np.isnan(val):
+                ax2.text(bar.get_x() + bar.get_width() / 2,
+                         bar.get_height() + ax2.get_ylim()[1] * 0.01,
+                         f'{val:.3f} m', ha='center', va='bottom',
+                         fontsize=10, fontweight='bold')
 
     plt.tight_layout()
     out = os.path.join(OUT, 'q1d_loop.png')

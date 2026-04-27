@@ -85,7 +85,7 @@ nothing. ICP cannot find a unique minimum for forward motion.
 | feat=500 | FAILED init | 0.015 m* |
 | feat=250 | FAILED init | FAILED init |
 | No outlier rejection | 5.76 m (+31%) | 0.474 m (+1381%) |
-| No loop closure | 5.11 m (+16%) | 0.038 m (+19%) |
+| No loop closure | 18.02 m (+310%) | 0.049 m (+54%) |
 
 *feat=500 TUM ATE is lower than baseline but misleading — only 45% of frames
 tracked. ATE is measured only over tracked frames; the hard late segment was
@@ -231,23 +231,30 @@ preventing the pose graph from being over-constrained by near-duplicate loops.
 
 ### Q3d — Factor graph optimisation (GTSAM)
 
-| Sequence | Before | After | Reduction |
-|---|---|---|---|
-| Floor7_Hallway | 0.163 m | 0.061 m | **−62%** |
-| Basement_1 | 0.194 m | 0.165 m | −15% |
-| Outdoor_1 | 0.941 m | 0.886 m | −6% |
+The submitted Q3d run is a useful negative result: GTSAM reduces the total
+pose-graph Mahalanobis cost, but the simple endpoint closure error gets worse
+on the two indoor sequences. The report therefore presents PGO as a diagnosed
+weighting/tension issue, not as a closure-error improvement.
+
+| Sequence | Loops | Graph cost | Closure before | Closure after | Outcome |
+|---|---:|---:|---:|---:|---|
+| Floor7_Hallway | 8 | 69762 → 2752 | 0.166 m | 0.221 m | worse |
+| Basement_1 | 10 | 61253 → 7349 | 0.170 m | 0.204 m | worse |
+| Outdoor_1 | 0 | 0 → 0 | 8.084 m | 8.084 m | unchanged |
 
 - Odometry edges: 3×3 information matrix from ICP Hessian × inlier count
-- Loop edges: per-loop ICP Hessian propagated (not fixed sigma — bug fixed)
+- Loop edges: ICP-derived information, but still over-tensioned relative to odometry
 - Anchor prior: σ=1e-4 on pose 0
-- GTSAM Levenberg-Marquardt, 200 iter, rel.tol=1e-8
+- GTSAM Levenberg-Marquardt, 200 iterations
 
-**Why Floor7 benefits most (−62%):** well-separated loop revisit points
-strongly constrain the drift direction. Factor graph can pull start/end
-together cleanly.
+**Why cost improves while closure worsens:** the optimiser minimises the
+weighted residual over all odometry and loop factors. Endpoint closure is only
+one derived diagnostic, so it can worsen if the loop factors and odometry chain
+pull the trajectory in slightly inconsistent directions.
 
-**Why Outdoor benefits least (−6%):** noisy ICP in sparse outdoor geometry
-produces loop constraints that don't precisely match odometry geometry.
+**Why Outdoor is unchanged:** no loop closures were accepted, so the graph is
+odometry-only. With no global anchor beyond pose 0 and no loop factors, PGO
+has no information with which to correct drift.
 
 ### The corridor / aperture problem (why Floor7 and Outdoor drift)
 
@@ -257,9 +264,10 @@ algorithm cannot find a unique minimum. This is **Lab 08 Activity 3B** and is
 a fundamental physical limitation, not a code bug.
 
 **Oral answer:** *"Floor7_Hallway is a featureless Marshgate corridor — the
-aperture problem means ICP can't estimate forward motion. This is why it
-benefits most from factor-graph loop closure (−62%): the loop constraints
-resolve the ambiguity the odometry couldn't."*
+aperture problem means ICP has weak forward-motion constraints. The detected
+loops reduce the graph cost, but in the submitted weighting they are in tension
+with odometry, so endpoint closure worsens from 0.166 m to 0.221 m instead of
+improving."*
 
 ---
 
@@ -270,7 +278,7 @@ resolve the ambiguity the odometry couldn't."*
 | Step-angle divergence used absolute world headings — wraps at ±180° | Rejected valid ICP steps near ±180° heading | Use `dT_step = inv(prev_pose) @ pose`; extract angle from relative transform |
 | Occupancy grid fixed at 25 m centred at (0,0) | Clipped large trajectories silently | `_grid_extent_from_trajectory()` auto-sizes to bounding box + 3 m margin |
 | Lap detection used cumulative heading — fails for hairpin corridors | Detected 0 laps on corridor sequences | Replaced with proximity-based method (returns within 1.5 m of origin after ≥5 m arc) |
-| Loop closure edges used fixed sigma regardless of ICP quality | PGO degraded Basement_1 by over-trusting weak loops | Per-loop ICP Hessian propagated through detection; each edge carries its own information matrix |
+| Loop/odometry weighting still over-tensions PGO | Graph cost drops but closure error and occupancy grids degrade | Report documents the negative result; proposed fix is looser loop weights or a robust kernel |
 | Q1b KITTI sweep showed unverifiable `max_map_pts` values | Could not be verified from logs | Replaced with `_parse_kitti_log()` that reads actual reset counts from log files at plot time |
 | Video used `max_range_mm=4000` (old lab default) | Trajectory looked broken; 108 spurious loops shown | Fixed to 12,000 mm + per-sequence outdoor ICP params |
 | Video `MAX_SCANS=1500` cap cut second loop | Full two-loop path not visible | Removed cap (`None` = all scans) |
@@ -292,12 +300,13 @@ Factory intrinsics are used, validated as accurate by 8 other COLMAP runs
 on the same D455 camera (all within 1.6%). The brief requires calibration for
 1 indoor + 1 outdoor — satisfied by Basement_1 and Outdoor_1.
 
-**"Why did your Basement_1 PGO get worse in earlier runs?"**
-The original code used a fixed sigma for all loop closure edges regardless of
-ICP match quality. A borderline match at score=0.71 was trusted the same as
-a perfect one at 0.97, causing the solver to over-constrain in the wrong
-direction. Fixed by propagating the per-loop ICP Hessian as the information
-matrix — weak loops are now automatically down-weighted.
+**"Why did PGO get worse even though the graph cost went down?"**
+Because the optimiser minimises the weighted sum of all factor residuals, not
+the start-to-end closure distance directly. In the submitted run the loop
+factors and odometry factors are slightly inconsistent; Levenberg-Marquardt
+finds a lower-cost compromise, but that compromise increases the endpoint
+closure error and degrades the occupancy grid. The right fix is to soften loop
+weights or add a robust kernel.
 
 **"Your KITTI feat=500 ATE is lower than baseline — does that mean fewer features is better?"**
 No. feat=500 only tracked 45% of frames before losing tracking. It dropped
@@ -363,3 +372,40 @@ to SciPy SLSQP (produces slightly different results).
 ```bash
 pip install gtsam>=4.3   # or: pip install gtsam==4.3.0
 ```
+
+---
+
+## Presentation script (slide-by-slide)
+
+1. **Title Slide**  
+Hi everyone, we are Group 32. This is our COMP0222 Coursework 2 presentation on Visual and LiDAR SLAM using our own recorded sequences. We will cover Q2 first, then Q3.
+
+2. **Agenda**  
+Quick roadmap: first Visual SLAM (data collection, calibration, and COLMAP vs ORB-SLAM2). Then LiDAR SLAM (sequence quality, parameter sweep, loop closure, and pose-graph optimisation).
+
+3. **Part 1 Divider (Q2)**  
+We start with Q2: monocular visual SLAM on one indoor and one outdoor sequence recorded by us.
+
+4. **Q2(a) Capture and Calibration**  
+We used Intel RealSense D455 at 848x480, 30 fps, and walked slowly to keep frame-to-frame motion small. Indoor is Basement_1 (Lift D room), outdoor is Outdoor_1 (rear courtyard). We calibrated using COLMAP OPENCV, converted cameras.txt to ORB-SLAM2 YAML, and re-ran ORB-SLAM2 with calibrated intrinsics. `fx` stayed close to factory, but `fy` inflated. We also tried the Lab 07-style wall subset; in our recordings it gave noisier intrinsics and worse downstream performance, so we report that result directly.
+
+5. **Q2(b) COLMAP Reconstruction**  
+COLMAP reconstructs both scenes clearly. Basement_1 is compact and stable; Outdoor_1 has more keyframes and points due to long textured facade. COLMAP is sequential here, so it does not close loops by itself. We therefore use it as a strong reference, not perfect ground truth.
+
+6. **Q2(b) ORB-SLAM2 and Comparison**  
+Indoors, COLMAP and ORB-SLAM2 agree well. Outdoors, with calibrated intrinsics, rotation disagreement reaches about 169 degrees. The key factor is inflated `fy`, which biases monocular initialisation in the open scene. With factory intrinsics on the same sequence, the disagreement drops to about 0.9 degrees. So this is mainly a calibration sensitivity issue.
+
+7. **Part 2 Divider (Q3)**  
+Now Q3: LiDAR SLAM with our own 2D scans, including parameter sweep, loop closure, and graph optimisation.
+
+8. **Q3(a)/(b) Sequences and Parameter Sweep**  
+We evaluated Basement_1, Floor7_Hallway, and Outdoor_1. Basement_1 is the clean baseline. Floor7 and especially Outdoor_1 expose harder conditions. The sweep shows parameter effects depend strongly on environment; one setting does not work best everywhere.
+
+9. **Q3(b) Key Parameter Findings**  
+Maximum range has the largest effect. Short range harms indoor geometry by removing far-wall constraints, but can help outdoors by dropping noisy distant returns. Angular subsampling is generally harmful. Voxel filtering helps in the hallway but can hurt sparse outdoor scans. Heavy scan skipping can collapse trajectories when inter-scan motion gets too large.
+
+10. **Q3(c) Loop Closure Detection**  
+Our detector combines spatial checks with overlap scoring. We detect reliable closures on Basement_1 and Floor7, and none on Outdoor_1 because the trajectory freezes early. Score distributions separate true and false closures clearly; 0.70 works well on our indoor data.
+
+11. **Q3(d) Factor Graph and PGO**  
+We built an SE(2) graph in GTSAM with odometry and loop factors. Optimisation reduces graph cost strongly, but closure error slightly worsens indoors and occupancy maps degrade visually. So lower optimisation cost did not automatically give better final map quality in our case.

@@ -1,0 +1,411 @@
+%% COMP0222 CW2 Group 32 — Beamer Presentation (Q2 + Q3 only)
+%% Build: pdflatex COMP0222_CW2_GRP_32_presentation.tex  (run twice)
+\documentclass[aspectratio=169,10pt]{beamer}
+
+% ---- PACKAGES ----
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{calc}
+\usepackage{array}
+\usepackage{colortbl}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins}
+
+% ---- COLOUR PALETTE ----
+\definecolor{indigo}{HTML}{1A0F5E}    % deep indigo — Visual SLAM
+\definecolor{teal}{HTML}{007B7F}      % teal — LiDAR SLAM & accent
+\definecolor{mist}{HTML}{EEF0F8}      % very light indigo for boxes
+\definecolor{ink}{HTML}{1C1C2E}       % near-black body text
+\definecolor{smoke}{HTML}{F4F5FA}     % slide background
+
+% ---- BEAMER BASICS ----
+\usetheme{default}
+\usecolortheme{default}
+\setbeamertemplate{navigation symbols}{}
+\setbeamercolor{normal text}{fg=ink}
+\setbeamercolor{frametitle}{fg=indigo}
+\setbeamercolor{block title}{bg=indigo, fg=white}
+\setbeamercolor{block body}{bg=mist, fg=ink}
+\setbeamercolor{section in head/foot}{bg=indigo, fg=white}
+
+% ---- FONTS ----
+\setbeamerfont{frametitle}{size=\normalsize, series=\bfseries}
+\setbeamerfont{framesubtitle}{size=\scriptsize, series=\mdseries}
+
+% ---- SLIDE BACKGROUND ----
+\setbeamertemplate{background}{%
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[smoke] (current page.south west) rectangle (current page.north east);
+  \end{tikzpicture}%
+}
+
+% ---- THIN HEADER BAR ----
+\setbeamertemplate{headline}{%
+  \begin{beamercolorbox}[wd=\paperwidth,ht=0.34cm,dp=0pt,
+      leftskip=0.4cm,rightskip=0.4cm]{section in head/foot}
+    \vspace{0.05cm}%
+    {\color{white}\fontsize{5}{5}\selectfont\textsc{COMP0222 CW2 — Group 32}}%
+    \hfill
+    {\color{white}\fontsize{5}{5}\selectfont\insertframenumber}%
+    \vspace{0.02cm}%
+  \end{beamercolorbox}%
+}
+\setbeamertemplate{footline}{}
+
+% ---- FRAME TITLE with coloured rule ----
+\setbeamertemplate{frametitle}{%
+  \vspace{0.10cm}%
+  {\usebeamerfont{frametitle}\color{indigo}\insertframetitle}%
+  \ifx\insertframesubtitle\@empty\else
+    \enspace{\color{teal}$\blacktriangleright$}\enspace
+    {\usebeamerfont{framesubtitle}\color{teal}\insertframesubtitle}%
+  \fi
+  \par\vspace{1pt}\noindent{\color{teal}\rule{\textwidth}{1.2pt}}%
+  \vspace{-0.08cm}%
+}
+
+% ---- BULLETS ----
+\setbeamertemplate{itemize item}{\scriptsize\color{teal}\textbullet}
+\setbeamertemplate{itemize subitem}{\tiny\color{indigo}$\diamond$}
+
+% ---- KEY-FINDING BOX (teal left rule) ----
+\newtcolorbox{kfbox}{
+  enhanced, skin=enhancedlast jigsaw,
+  colback=mist, colframe=teal,
+  leftrule=3pt, toprule=0.5pt, bottomrule=0.5pt, rightrule=0.5pt,
+  arc=2pt, boxsep=0pt, left=4pt, right=4pt, top=2pt, bottom=2pt,
+  fontupper=\scriptsize\color{indigo}
+}
+
+% ---- SECTION DIVIDER (full-bleed coloured frame) ----
+%   #1=label  #2=subtitle  #3=fill-colour
+\newcommand{\sectiondivider}[3]{%
+  \begin{frame}[plain]
+    \begin{tikzpicture}[remember picture,overlay]
+      \fill[#3] (current page.south west) rectangle (current page.north east);
+      % faint ghost triangle
+      \fill[white,opacity=0.06]
+        (current page.north west) --
+        ([xshift=6cm]current page.north west) --
+        (current page.north west |- current page.center) -- cycle;
+      % teal stripe
+      \fill[teal]
+        ([xshift=0.90cm]current page.south west) rectangle
+        ([xshift=1.22cm]current page.north west);
+      % part label
+      \node[white,anchor=west,font=\bfseries\large]
+        at ([xshift=1.6cm,yshift=0.55cm]current page.west) {#1};
+      % subtitle
+      \node[white!70!gray,anchor=west,font=\small]
+        at ([xshift=1.65cm,yshift=-0.35cm]current page.west) {#2};
+    \end{tikzpicture}
+  \end{frame}%
+}
+
+% ===========================================================================
+\begin{document}
+
+% ---------------------------------------------------------------------------
+% TITLE FRAME
+% ---------------------------------------------------------------------------
+\begin{frame}[plain]
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[indigo] (current page.south west) rectangle (current page.north east);
+    % teal left stripe
+    \fill[teal]
+      (current page.south west) rectangle ([xshift=0.48cm]current page.north west);
+    % subtle horizontal rule lines
+    \foreach \y in {1,2,3,4,5,6,7}{
+      \draw[white,opacity=0.04,line width=0.3pt]
+        ([yshift=\y cm]current page.south west) --
+        ([yshift=\y cm]current page.south east);
+    }
+    % separator rule
+    \draw[teal,line width=1.6pt]
+      ([xshift=0.85cm,yshift=2.05cm]current page.south west) --
+      ([xshift=14.2cm,yshift=2.05cm]current page.south west);
+    % main title
+    \node[white,anchor=south west,font=\bfseries\LARGE]
+      at ([xshift=0.85cm,yshift=2.3cm]current page.south west)
+      {COMP0222 Coursework 2};
+    % subtitle
+    \node[teal,anchor=south west,font=\bfseries\large]
+      at ([xshift=0.9cm,yshift=3.2cm]current page.south west)
+      {Visual and LiDAR SLAM with Own Sequences};
+    % authors
+    \node[white!70!gray,anchor=south west,font=\small]
+      at ([xshift=0.9cm,yshift=1.35cm]current page.south west)
+      {Group 32 \enspace---\enspace Muhammad Maaz \& Harmish};
+    % date
+    \node[white!50!gray,anchor=south west,font=\scriptsize]
+      at ([xshift=0.9cm,yshift=0.7cm]current page.south west)
+      {April 2026};
+  \end{tikzpicture}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+% AGENDA
+% ---------------------------------------------------------------------------
+\begin{frame}{Agenda}
+  \begin{columns}[T]
+    \begin{column}{0.47\textwidth}
+      \textbf{\color{indigo}Part 1. Visual SLAM (Q2)}\\[4pt]
+      Own monocular sequences run through COLMAP and ORB-SLAM2
+      \begin{itemize}\small
+        \item Q2(a) — Data collection \& COLMAP calibration
+        \item Q2(b) — COLMAP reconstruction and trajectory
+        \item Q2(b) — ORB-SLAM2 comparison (EVO Sim3)
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.47\textwidth}
+      \textbf{\color{indigo}Part 2. LiDAR SLAM (Q3)}\\[4pt]
+      Own 2D LiDAR sequences through ICP, loop closure, pose-graph optimisation
+      \begin{itemize}\small
+        \item Q3(a)/(b) — Sequences \& parameter sweep
+        \item Q3(c) — Loop closure detection
+        \item Q3(d) — Factor graph optimisation (GTSAM)
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ===========================================================================
+\sectiondivider{Part 1.\ Visual SLAM}{Q2 --- own indoor and outdoor monocular sequences}{indigo}
+
+% ---------------------------------------------------------------------------
+% Q2(a) — Capture and calibration
+% ---------------------------------------------------------------------------
+\begin{frame}[shrink=5]{Q2(a) Capture and Calibration}
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      \textbf{\color{indigo}Rig and protocol}
+      \begin{itemize}\small
+        \item Intel RealSense D455, RGB at 848$\times$480, 30\,fps
+        \item Auto-exposure locked after 2\,s warm-up; walk 0.3--0.5\,m/s
+        \item \textbf{Basement\_1} (indoor): LGF Lift D room, 869 ORB-SLAM2 poses, closed loop with concrete walls on all four sides
+        \item \textbf{Outdoor\_1} (outdoor): rear courtyard, brick facade + trees, 983 poses
+      \end{itemize}
+      \vspace{0.3em}
+      \textbf{\color{indigo}Calibration via COLMAP self-calibration}
+      \begin{itemize}\small
+        \item OPENCV 8-param $(f_x,f_y,c_x,c_y,k_1,k_2,p_1,p_2)$ per sequence
+        \item Basement\_1 scratch SIMPLE\_PINHOLE (no prior) confirms intrinsics recoverable from images
+        \item Calibrated YAML fed to ORB-SLAM2 (\texttt{ba\_refine\_focal\_length=0} fixes $f$ in later runs)
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.47\textwidth}
+      {\footnotesize
+      \begin{tabular}{@{}lccr@{}}
+        \toprule
+        Run & $f_x$ (px) & $f_y$ (px) & $\Delta f_x$\\
+        \midrule
+        Factory D455       & 426.7 & 426.1 & ---\\
+        B1 scratch PINHOLE & 415.4 & 415.4 & $-2.6\,\%$\\
+        B1 OPENCV          & 430.6 & 445.8 & $+0.9\,\%$\\
+        Outdoor\_1 OPENCV  & 427.9 & 437.2 & $+0.3\,\%$\\
+        \bottomrule
+      \end{tabular}}
+      \vspace{0.4em}
+      \begin{itemize}\small
+        \item Both OPENCV runs agree with factory $f_x$ within 1\,\%
+        \item $f_y$ inflated 2--5\,\%: BA trades $f_y$ against radial coefficients when depth variation is limited
+        \item SIMPLE\_PINHOLE $f{=}415.4$\,px is 2.6\,\% below factory (forced $f_x{=}f_y$ on mildly asymmetric sensor)
+      \end{itemize}
+      \vspace{0.2em}
+      \begin{kfbox}
+        Self-calibration adequate for low-distortion D455, but inflated $f_y$ causes Outdoor\_1 heading artefact
+      \end{kfbox}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+% Q2(b) — COLMAP reconstruction
+% ---------------------------------------------------------------------------
+\begin{frame}[shrink=5]{Q2(b) COLMAP Reconstruction}
+  \begin{columns}[T]
+    \begin{column}{0.52\textwidth}
+      \includegraphics[width=\linewidth]{plots/q2b_colmap_trajectories.png}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \begin{itemize}\small
+        \item \textbf{Basement\_1}: 283 COLMAP keyframes (33\,\% keyframe rate); compact closed loop; two open doorways visible as free-space fans in point cloud
+        \item \textbf{Outdoor\_1}: 360 COLMAP keyframes (37\,\%); larger rectangular courtyard path
+        \item Sequential matcher: no loop closure, so second-loop return leg is never registered
+        \item COLMAP serves as pseudo-ground-truth since no external GT exists for own data
+      \end{itemize}
+      \vspace{0.4em}
+      \begin{kfbox}
+        COLMAP gives wider pose coverage but cannot close loops; ORB-SLAM2 closes loops but is brittle to direction changes and monocular initialisation
+      \end{kfbox}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+% Q2(b) — ORB-SLAM2 and comparison
+% ---------------------------------------------------------------------------
+\begin{frame}[shrink=5]{Q2(b) ORB-SLAM2 and Comparison}
+  \begin{columns}[T]
+    \begin{column}{0.52\textwidth}
+      \includegraphics[width=\linewidth]{plots/q2b_colmap_vs_orbslam.png}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \textbf{Failure modes}
+      \begin{itemize}\small
+        \item \textbf{Outdoor\_1}: $169^{\circ}$ heading flip from COLMAP OPENCV $f_y$ inflation ($+2.6\,\%$); inflated $f_y$ compresses vertical parallax and biases monocular init. Factory intrinsics give $0.9^{\circ}$
+        \item \textbf{Basement\_1}: both methods agree; compact room with well-textured walls gives clean triangulation
+      \end{itemize}
+      \vspace{0.3em}
+      {\footnotesize
+      \begin{tabular}{@{}lcc@{}}
+        \toprule
+        & Trans.\ RMSE & Rot.\ RMSE\\
+        \midrule
+        Basement\_1 (indoor)  & 0.046\,a.u. & $3.8^{\circ}$\\
+        Outdoor\_1  (outdoor) & 1.488\,a.u. & $169.2^{\circ}$\\
+        \bottomrule
+      \end{tabular}}
+      \vspace{0.3em}
+      \begin{kfbox}
+        Neither monocular method gives a complete globally consistent trajectory; COLMAP has wider coverage, ORB-SLAM2 is dense within tracked segments but brittle to init and direction changes
+      \end{kfbox}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ===========================================================================
+\sectiondivider{Part 2.\ LiDAR SLAM}{Q3 --- own 2D LiDAR sequences with parameter sweep, loop closure, pose-graph optimisation}{teal}
+
+% ---------------------------------------------------------------------------
+% Q3(a)/(b) — Sequences and parameter sweep
+% ---------------------------------------------------------------------------
+\begin{frame}[shrink=5]{Q3(a)/(b) Sequences and Parameter Sweep}
+  \framesubtitle{RPLidar A2M12, 360°, 12\,m rated, 90° blind spot masked}
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      {\footnotesize
+      \begin{tabular}{@{}p{2.2cm}ccc@{}}
+        \toprule
+        \textbf{Closure error (m)} & \textbf{B1} & \textbf{Floor7} & \textbf{Out}\\
+        \midrule
+        Baseline (12\,m)         & \textbf{0.17} & \textbf{0.16} & 8.17\\
+        Range 2\,m               & 2.38 & 2.02 & 2.81\\
+        Angular $n{=}2$/$n{=}3$  & 0.68/0.26 & 0.71/1.21 & 3.95/4.76\\
+        Voxel 0.05\,m/0.10\,m   & 0.41/0.29 & 0.14/3.04 & 12.4/6.22\\
+        Skip 50\,\%/33\,\%       & 0.23/0.26 & 2.94/0.73 & 11.5/10.9\\
+        \bottomrule
+      \end{tabular}}
+      \vspace{0.3em}
+      {\footnotesize\textbf{Sequences (RPLidar A2M12):}}
+      \begin{itemize}\footnotesize
+        \item \textbf{Basement\_1}: 7$\times$3\,m room, 1939 scans, best ICP health
+        \item \textbf{Floor7\_Hallway}: 7th-floor hall ($\sim$20\,m sides), 1304 scans
+        \item \textbf{Outdoor\_1}: ground-floor exit, 1462 scans, ICP freezes at scan~400
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.47\textwidth}
+      \begin{itemize}\small
+        \item \textbf{Only Basement\_1} produces a coherent map at baseline; other two stay degenerate under every variant --- sweep is diagnostic rather than absolute
+        \item \textbf{Max-range 2\,m}: cannot reach far walls of 7$\times$3\,m room; translation drops out (rank-deficient normal equations). Outdoors: truncates noisy far returns, improves ICP
+        \item \textbf{Angular subsampling}: non-monotone in $n$; rotation is the under-constrained mode in the hill-climber
+        \item \textbf{Voxel 0.05\,m}: normalises point density in open hall, but destabilises sparse outdoor scans
+        \item \textbf{Skip 33\,\%}: collapses trajectory on B1 (per-scan displacement exceeds 30\,mm search window)
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+% Q3(b) — Key parameter findings
+% ---------------------------------------------------------------------------
+\begin{frame}[shrink=5]{Q3(b) Key Parameter Findings}
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      \includegraphics[width=\linewidth]{plots/q3b_grids_basement_1_max_range.png}\\[3pt]
+      \includegraphics[width=\linewidth]{plots/q3b_grids_basement_1_angular_resolution.png}
+    \end{column}
+    \begin{column}{0.47\textwidth}
+      \begin{itemize}\small
+        \item \textbf{Range 2\,m is environment-dependent.} Indoors cannot reach far walls; translation drops out. Outdoors truncates noisy distant returns (glass, vegetation) and ICP improves
+        \item \textbf{Angular subsampling is uniformly harmful.} Effect is non-monotone in $n$. Rotation is the under-constrained mode in the hill-climber
+        \item \textbf{Voxel downsampling helps in the open hall} by normalising point density, but destabilises sparse outdoor scans (worst result at 0.10\,m)
+        \item \textbf{Skip=3 collapses trajectory.} Indoor path length 35\,m $\to$ short; low closure is a truncation artefact. Per-scan displacement exceeds 30\,mm $\times$ 10-iter search window
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+% Q3(c) — Loop closure detection   [fixed: shrink=15, scriptsize text]
+% ---------------------------------------------------------------------------
+\begin{frame}[shrink=15]{Q3(c) Loop Closure Detection}
+  \begin{columns}[T]
+    \begin{column}{0.54\textwidth}
+      \includegraphics[width=\linewidth]{plots/q3c_basement_1.png}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \textbf{Detector}
+      \begin{itemize}\scriptsize
+        \item Spatial proximity with non-maximum suppression
+        \item Arc gate $\ge\min(8\,\text{m},\,0.4{\cdot}\text{arc})$; pose dist $\le 2.0$\,m
+        \item ICP overlap score $\ge 0.70$: 70\,\% of scan points within 0.4\,m of reference
+      \end{itemize}
+      \vspace{0.25em}
+      \textbf{Results}
+      \begin{itemize}\scriptsize
+        \item \textbf{Basement\_1}: 10 closures / 2933 candidates; clean approach-and-drop score pattern
+        \item \textbf{Floor7\_Hallway}: 8 closures / 1991 candidates
+        \item \textbf{Outdoor\_1}: 0 closures; trajectory frozen, arc gate rejects almost all pairs
+      \end{itemize}
+      \vspace{0.2em}
+      \begin{kfbox}
+        Score gap 0.45--0.60 (false) vs 0.75--0.95 (true); threshold 0.70 keeps every genuine revisit across both indoor sequences
+      \end{kfbox}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------
+% Q3(d) — Factor graph and PGO
+% ---------------------------------------------------------------------------
+\begin{frame}[shrink=8]{Q3(d) Factor Graph and PGO}
+  \framesubtitle{GTSAM SE(2), Levenberg--Marquardt 200 iters; odometry + loop closure factors}
+  \begin{columns}[T]
+    \begin{column}{0.52\textwidth}
+      \begin{tabular}{@{}c@{\hspace{2pt}}c@{}}
+        \includegraphics[width=0.49\linewidth]{plots/q3d_basement_1.png} &
+        \includegraphics[width=0.49\linewidth]{plots/q3d_floor7_hallway.png}
+      \end{tabular}\\[2pt]
+      \includegraphics[width=\linewidth]{plots/q3d_grid_basement_1.png}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \textbf{SE(2) pose graph in GTSAM (LM, 200 iters)}
+      \begin{itemize}\small
+        \item Tight Gaussian prior anchors $x_0$ ($\sigma{=}10^{-4}$)
+        \item Odometry factors: ICP Hessian as information matrix
+        \item Loop closure factors: looser information ($\sigma{=}0.10$\,m, 0.20\,rad)
+      \end{itemize}
+      \vspace{0.2em}
+      {\footnotesize
+      \begin{tabular}{@{}lccc@{}}
+        \toprule
+        & Loops & Before & After\\
+        \midrule
+        Basement\_1     & 10 & 0.170\,m & 0.204\,m\\
+        Floor7\_Hallway &  8 & 0.166\,m & 0.221\,m\\
+        Outdoor\_1      &  0 & 8.084\,m & 8.084\,m\\
+        \bottomrule
+      \end{tabular}}
+      \vspace{0.2em}
+      \begin{kfbox}
+        Graph cost falls $8{\times}$--$25{\times}$, but closure error worsens and OGM degrades: the over-confident loop Hessian forces abrupt pose jumps, scattering ray-cast log-odds updates
+      \end{kfbox}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\end{document}

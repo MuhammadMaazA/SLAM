@@ -47,7 +47,7 @@ _HERE    = os.path.dirname(os.path.abspath(__file__))
 _ROOT    = os.path.abspath(os.path.join(_HERE, '..'))
 REC1     = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))
 REC2     = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
-OUT_DIR  = os.environ.get('SLAM_OUT',  os.path.join(_ROOT, 'data', 'q3_results'))
+OUT_DIR  = os.environ.get('SLAM_OUT',  os.path.abspath(os.path.join(_ROOT, '..', 'plots')))
 os.makedirs(OUT_DIR, exist_ok=True)
 
 SEQUENCES = {
@@ -74,8 +74,8 @@ PRIMARY_SEQUENCES = {
     'Outdoor_1':      SEQUENCES['Outdoor_1'],        # outdoor
 }
 
-# RPLidar A1 maximum rated range (mm). Actual scan data reaches ~14 000 mm in
-# open spaces; the A1 nominal spec is 12 000 mm.
+# RPLidar A2M12 maximum rated range (mm). Actual scan data reaches ~14 000 mm
+# in open spaces; the nominal coursework processing cap is 12 000 mm.
 SENSOR_MAX_RANGE_MM = 12000.0
 
 # Audit fix: the original main pipeline still used the historical 4 m default
@@ -120,7 +120,7 @@ def load_scans(path, max_scans=None):
 # ============================================================
 # SCAN PROCESSING
 # ============================================================
-# RPLidar A1 return-quality threshold. The driver emits q in 0..63; q<5
+# RPLidar return-quality threshold. The driver emits q in 0..63; q<5
 # corresponds to multipath / weak returns that ICP should not weight equally
 # with clean geometry. Applied consistently across pipeline and videos.
 RPLIDAR_MIN_QUALITY = 5
@@ -840,29 +840,29 @@ _Q3B_WHY = {
 
 
 def _plot_q3b(seq_name, res_range, res_angular, res_voxel, res_rate, out_dir):
-    fig, axes = plt.subplots(4, 4, figsize=(22, 18))
+    fig, axes = plt.subplots(3, 4, figsize=(24, 14))
     fig.suptitle(f'Q3b Parameter Analysis — {seq_name}\n'
-                 'Row 1: trajectory overlays | Row 2: closure error | '
-                 'Row 3: map density | Row 4: why this parameter matters',
-                 fontsize=12, fontweight='bold')
+                 'Row 1: trajectory overlays | Row 2: closure error | Row 3: map density',
+                 fontsize=14, fontweight='bold')
 
     pairs = [
-        (res_range,   'Max Range',          axes[0, 0], axes[1, 0], axes[2, 0], axes[3, 0]),
-        (res_angular, 'Angular Resolution', axes[0, 1], axes[1, 1], axes[2, 1], axes[3, 1]),
-        (res_voxel,   'Voxel Downsampling', axes[0, 2], axes[1, 2], axes[2, 2], axes[3, 2]),
-        (res_rate,    'Scan Rate',          axes[0, 3], axes[1, 3], axes[2, 3], axes[3, 3]),
+        (res_range,   'Max Range',          axes[0, 0], axes[1, 0], axes[2, 0]),
+        (res_angular, 'Angular Resolution', axes[0, 1], axes[1, 1], axes[2, 1]),
+        (res_voxel,   'Voxel Downsampling', axes[0, 2], axes[1, 2], axes[2, 2]),
+        (res_rate,    'Scan Rate',          axes[0, 3], axes[1, 3], axes[2, 3]),
     ]
 
     colors = plt.cm.tab10.colors
-    for res_dict, title, ax_traj, ax_bar, ax_den, ax_why in pairs:
+    for res_dict, title, ax_traj, ax_bar, ax_den in pairs:
         for ci, (label, r) in enumerate(res_dict.items()):
             t = r['trajectory']
             ax_traj.plot(t[:, 0], t[:, 1], color=colors[ci],
-                         label=label, lw=1.5, alpha=0.8)
-        ax_traj.set_title(title, fontsize=10)
-        ax_traj.set_xlabel('X (m)', fontsize=8)
-        ax_traj.set_ylabel('Y (m)', fontsize=8)
-        ax_traj.legend(fontsize=7)
+                         label=label, lw=2.0, alpha=0.85)
+        ax_traj.set_title(title, fontsize=13, fontweight='bold')
+        ax_traj.set_xlabel('X (m)', fontsize=11)
+        ax_traj.set_ylabel('Y (m)', fontsize=11)
+        ax_traj.legend(fontsize=10)
+        ax_traj.tick_params(labelsize=10)
         ax_traj.set_aspect('equal', adjustable='datalim')
         ax_traj.grid(True, alpha=0.3)
 
@@ -872,13 +872,14 @@ def _plot_q3b(seq_name, res_range, res_angular, res_voxel, res_rate, out_dir):
         bars   = ax_bar.bar(range(len(labels)), errs,
                             color=colors[:len(labels)], alpha=0.8)
         ax_bar.set_xticks(range(len(labels)))
-        ax_bar.set_xticklabels(labels, rotation=20, ha='right', fontsize=7)
-        ax_bar.set_ylabel('Closure error (m)', fontsize=8)
-        ax_bar.set_title(f'{title} — closure error', fontsize=9)
+        ax_bar.set_xticklabels(labels, rotation=20, ha='right', fontsize=10)
+        ax_bar.set_ylabel('Closure error (m)', fontsize=11)
+        ax_bar.set_title(f'{title} — closure error', fontsize=11)
+        ax_bar.tick_params(labelsize=10)
         ax_bar.grid(True, alpha=0.3, axis='y')
         for bar, val in zip(bars, errs):
             ax_bar.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                        f'{val:.2f}', ha='center', va='bottom', fontsize=7)
+                        f'{val:.2f}', ha='center', va='bottom', fontsize=10)
 
         # Row 3: map point density (median 1-NN distance)
         densities = [res_dict[lb].get('density', float('nan')) for lb in labels]
@@ -886,39 +887,16 @@ def _plot_q3b(seq_name, res_range, res_angular, res_voxel, res_rate, out_dir):
                                [0 if np.isnan(d) else d for d in densities],
                                color=colors[:len(labels)], alpha=0.8)
         ax_den.set_xticks(range(len(labels)))
-        ax_den.set_xticklabels(labels, rotation=20, ha='right', fontsize=7)
-        ax_den.set_ylabel('Median 1-NN dist (m)', fontsize=8)
-        ax_den.set_title(f'{title} — map density\n(lower = denser = better)', fontsize=9)
+        ax_den.set_xticklabels(labels, rotation=20, ha='right', fontsize=10)
+        ax_den.set_ylabel('Median 1-NN dist (m)', fontsize=11)
+        ax_den.set_title(f'{title} — map density\n(lower = denser = better)', fontsize=11)
+        ax_den.tick_params(labelsize=10)
         ax_den.grid(True, alpha=0.3, axis='y')
         for bar, val in zip(den_bars, densities):
             if not np.isnan(val):
                 ax_den.text(bar.get_x() + bar.get_width()/2,
                             bar.get_height() + 0.0002,
-                            f'{val:.4f}', ha='center', va='bottom', fontsize=7)
-
-        # Row 4: sequence-specific observation (actual numbers) + general why
-        ax_why.axis('off')
-        labels_l   = list(res_dict.keys())
-        errs_l     = [closure_error(res_dict[lb]['trajectory']) for lb in labels_l]
-        valid_errs = [(lb, e) for lb, e in zip(labels_l, errs_l) if not np.isnan(e)]
-        if len(valid_errs) >= 2:
-            best_lb,  best_e  = min(valid_errs, key=lambda x: x[1])
-            worst_lb, worst_e = max(valid_errs, key=lambda x: x[1])
-            ratio = worst_e / max(best_e, 1e-6)
-            specific = (
-                f'Best:  {best_lb} → {best_e:.3f} m closure\n'
-                f'Worst: {worst_lb} → {worst_e:.3f} m closure\n'
-                f'({ratio:.1f}× difference)\n\n'
-            )
-        else:
-            specific = ''
-        full_txt = specific + _Q3B_WHY.get(title, '')
-        ax_why.text(0.5, 0.5, full_txt,
-                    transform=ax_why.transAxes, fontsize=7.5,
-                    ha='center', va='center', family='monospace',
-                    bbox=dict(boxstyle='round,pad=0.5', facecolor='lightyellow',
-                              edgecolor='goldenrod', alpha=0.9))
-        ax_why.set_title(f'{title} — analysis', fontsize=9, style='italic')
+                            f'{val:.4f}', ha='center', va='bottom', fontsize=10)
 
     plt.tight_layout()
     out = os.path.join(out_dir, f'q3b_{seq_name.lower()}.png')

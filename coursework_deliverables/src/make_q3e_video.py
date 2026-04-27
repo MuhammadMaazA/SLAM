@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Q3e: LiDAR SLAM mapping demonstration — all three Q3 sequences in a 1x3 grid.
-Shows trajectory + point cloud building simultaneously across environments.
+Q3e: LiDAR SLAM mapping demonstration with synced real video.
+Top row: actual RGB camera feed for each sequence.
+Bottom row: LiDAR SLAM trajectory + map build-up for each sequence.
 Uses the same SLAM pipeline as the Q3 analysis (run_slam from
 q3_lidar_slam_complete) so the visualisation matches the reported numbers.
 Output: COMP0222_CW2_GRP_32_LiDAR_SLAM.mp4
@@ -21,7 +22,16 @@ from q3_lidar_slam_complete import (      # noqa: E402
     load_scans as q3_load_scans,
 )
 
-_REC1 = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))
+_REC1_DEFAULT = os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings')
+_REC1_NESTED = os.path.join(_REC1_DEFAULT, 'tmp_recordings')
+_REC1_ENV = os.environ.get('SLAM_REC1')
+_REC1_CANDIDATES = [p for p in (_REC1_ENV, _REC1_DEFAULT, _REC1_NESTED) if p]
+_REC1 = _REC1_CANDIDATES[0]
+for _cand in _REC1_CANDIDATES:
+    _probe = os.path.join(_cand, 'Basement_1', 'lidar', 'scans.jsonl')
+    if os.path.exists(_probe):
+        _REC1 = _cand
+        break
 _REC2 = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
 
 SEQUENCES = {
@@ -71,6 +81,22 @@ def run_slam(name, path):
     return poses, map_pts
 
 
+def get_rgb_info(seq_name, scan_path):
+    """Return RGB directory, sorted frame list, and count for a sequence."""
+    seq_dir = os.path.dirname(os.path.dirname(scan_path))  # .../<sequence>/
+    rgb_candidates = [
+        os.path.join(seq_dir, 'camera', 'rgb'),
+        os.path.join(_REC1_DEFAULT, seq_name, 'camera', 'rgb'),
+        os.path.join(_REC1_NESTED, seq_name, 'camera', 'rgb'),
+    ]
+    for rgb_dir in rgb_candidates:
+        if os.path.isdir(rgb_dir):
+            frames = sorted(f for f in os.listdir(rgb_dir) if f.lower().endswith('.jpg'))
+            if frames:
+                return rgb_dir, frames, len(frames)
+    return rgb_candidates[0], [], 0
+
+
 # ── Run SLAM for all sequences ─────────────────────────────────────────────────
 slam_data = []
 seq_names = list(SEQUENCES.keys())
@@ -80,21 +106,33 @@ for name in seq_names:
         print(f"  SKIP {name}")
         continue
     poses, map_pts = run_slam(name, path)
-    slam_data.append({'name': name, 'poses': poses, 'map': map_pts})
+    rgb_dir, rgb_frames, n_rgb = get_rgb_info(name, path)
+    if n_rgb == 0:
+        print(f"    WARN: no RGB frames found at {rgb_dir}")
+    else:
+        print(f"    RGB frames: {n_rgb}")
+    slam_data.append({
+        'name': name,
+        'poses': poses,
+        'map': map_pts,
+        'rgb_dir': rgb_dir,
+        'rgb_frames': rgb_frames,
+        'n_rgb': n_rgb,
+    })
 
 n = len(slam_data)
 print(f"\nLoaded {n} sequences. Rendering {N_FRAMES} frames at {FPS}fps...")
 
 # ── Figure ─────────────────────────────────────────────────────────────────────
-nrows, ncols = 1, 3
-fig, axes = plt.subplots(nrows, ncols, figsize=(18, 7), facecolor='#080808', dpi=DPI)
-fig.suptitle('COMP0222 CW2 Group 32  |  LiDAR SLAM',
-             color='white', fontsize=13, fontweight='bold', y=0.99)
-axes = axes.flatten()
-for ax in axes:
+nrows, ncols = 2, 3
+fig, axes = plt.subplots(nrows, ncols, figsize=(18, 10), facecolor='#080808',
+                         dpi=DPI, squeeze=False)
+fig.suptitle('COMP0222 CW2 Group 32  |  LiDAR SLAM + Synced RGB Video',
+             color='white', fontsize=13, fontweight='bold', y=0.995)
+for ax in axes.flatten():
     ax.set_facecolor('#0d1117')
     for sp in ax.spines.values(): sp.set_edgecolor('#222')
-plt.tight_layout(rect=[0, 0.02, 1, 0.97])
+plt.tight_layout(rect=[0, 0.02, 1, 0.965])
 
 # Get frame dimensions
 fig.canvas.draw()
@@ -123,10 +161,38 @@ for frame in range(N_FRAMES):
     progress = frame / max(N_FRAMES - 1, 1)
 
     for i, d in enumerate(slam_data):
-        ax = axes[i]
-        ax.clear()
-        ax.set_facecolor('#0d1117')
-        for sp in ax.spines.values(): sp.set_edgecolor('#222')
+        ax_vid = axes[0, i]
+        ax_map = axes[1, i]
+        ax_vid.clear()
+        ax_map.clear()
+        for ax in (ax_vid, ax_map):
+            ax.set_facecolor('#0d1117')
+            for sp in ax.spines.values():
+                sp.set_edgecolor('#222')
+
+        # Top row: actual recorded RGB video
+        env = 'Indoor (large)' if d['name'] == 'Floor7_Hallway' else \
+              'Outdoor' if d['name'] == 'Outdoor_1' else 'Indoor'
+        if d['n_rgb'] > 0:
+            rgb_idx = int(progress * (d['n_rgb'] - 1))
+            rgb_name = d['rgb_frames'][rgb_idx]
+            rgb_path = os.path.join(d['rgb_dir'], rgb_name)
+            img_bgr = cv2.imread(rgb_path)
+            if img_bgr is not None:
+                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                ax_vid.imshow(img_rgb)
+            else:
+                ax_vid.text(0.5, 0.5, 'RGB frame read failed', ha='center',
+                            va='center', color='white', fontsize=9,
+                            transform=ax_vid.transAxes)
+        else:
+            ax_vid.text(0.5, 0.5, 'RGB video unavailable', ha='center',
+                        va='center', color='white', fontsize=9,
+                        transform=ax_vid.transAxes)
+        ax_vid.set_title(f"{d['name']}  [{env}]  RGB video",
+                         color='white', fontsize=8, pad=3)
+        ax_vid.set_xticks([])
+        ax_vid.set_yticks([])
 
         poses   = d['poses']
         map_pts = d['map']
@@ -139,35 +205,35 @@ for frame in range(N_FRAMES):
 
         # Map point cloud
         if len(m_show) > 0:
-            ax.scatter(m_show[:, 0], m_show[:, 1], c=c, s=0.6, alpha=0.4, zorder=2)
+            ax_map.scatter(m_show[:, 0], m_show[:, 1], c=c, s=0.6,
+                           alpha=0.4, zorder=2)
 
         # Trajectory path — white line, thicker for clarity
         if len(p_show) > 1:
-            ax.plot(p_show[:, 0], p_show[:, 1], color='white', lw=1.6,
-                    alpha=0.95, zorder=3)
-        ax.plot(*p_show[0],  'o', color='#00ff88', ms=6, zorder=5, label='Start')
-        ax.plot(*p_show[-1], 's', color='#ff3030', ms=6, zorder=5, label='Current')
+            ax_map.plot(p_show[:, 0], p_show[:, 1], color='white', lw=1.6,
+                        alpha=0.95, zorder=3)
+        ax_map.plot(*p_show[0],  'o', color='#00ff88', ms=6, zorder=5, label='Start')
+        ax_map.plot(*p_show[-1], 's', color='#ff3030', ms=6, zorder=5, label='Current')
 
         pct = 100 * n_show / len(poses)
-        env = 'Indoor (large)' if d['name'] == 'Floor7_Hallway' else \
-              'Outdoor' if d['name'] == 'Outdoor_1' else 'Indoor'
-        ax.set_title(f"{d['name']}  [{env}]  {pct:.0f}%",
-                     color='white', fontsize=8, pad=3)
-        ax.tick_params(colors='#444', labelsize=5)
+        ax_map.set_title(f"{d['name']}  [{env}]  LiDAR SLAM {pct:.0f}%",
+                         color='white', fontsize=8, pad=3)
+        ax_map.tick_params(colors='#444', labelsize=5)
 
         # Use stable limits so the view doesn't jump
         xl0, xl1, yl0, yl1 = seq_limits[i]
-        ax.set_xlim(xl0, xl1)
-        ax.set_ylim(yl0, yl1)
-        ax.set_aspect('equal')
+        ax_map.set_xlim(xl0, xl1)
+        ax_map.set_ylim(yl0, yl1)
+        ax_map.set_aspect('equal')
 
     # Hide unused axes
-    for j in range(len(slam_data), nrows * ncols):
-        axes[j].set_visible(False)
+    for j in range(len(slam_data), ncols):
+        axes[0, j].set_visible(False)
+        axes[1, j].set_visible(False)
 
     fig.texts = [t for t in fig.texts if 'Progress' not in t.get_text()]
     fig.text(0.5, 0.005,
-             f'Progress: {100*progress:.0f}%  |  White = robot trajectory  |  Colour = accumulated LiDAR map',
+             f'Progress: {100*progress:.0f}%  |  Top: recorded RGB  |  Bottom: white=trajectory, colour=LiDAR map',
              ha='center', color='#666', fontsize=8)
 
     fig.canvas.draw()

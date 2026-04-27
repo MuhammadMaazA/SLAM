@@ -30,6 +30,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.collections import LineCollection
 
 from evo.core import trajectory as evo_traj, metrics, sync
 from evo.core.metrics import PoseRelation
@@ -40,21 +41,14 @@ _ROOT       = os.path.abspath(os.path.join(_HERE, '..'))
 _BASE       = os.environ.get('SLAM_DATA', os.path.join(_ROOT, 'data'))
 COLMAP_DIR  = os.path.join(_BASE, 'q2_results', 'colmap_runs')
 ORBSLAM_DIR = os.path.join(_BASE, 'q2_results', 'orbslam_runs')
-OUT_DIR     = os.path.join(_BASE, 'q2_results')
+OUT_DIR     = os.path.abspath(os.path.join(_ROOT, '..', 'plots'))
 REC1        = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))
 REC2        = os.environ.get('SLAM_REC2', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings2'))
 Q2_TRAJ_VARIANT = os.environ.get('Q2_TRAJ_VARIANT', 'prefer_calibrated')
 
 SEQUENCES = [
-    ('OnePoolStreet1',  'outdoor'),
-    ('Basement_1',      'indoor'),
-    ('Outdoor_1',       'outdoor'),
-    ('Basement_2',      'indoor'),
-    ('BikeStorage',     'outdoor'),
-    ('BikeStorage2',    'outdoor'),
-    ('Washroom',        'indoor'),
-    ('Entrance2',       'outdoor'),
-    ('Floor7_Hallway',  'indoor'),
+    ('Basement_1',  'indoor'),
+    ('Outdoor_1',   'outdoor'),
 ]
 
 SEQ_COLORS = {'outdoor': '#ff6d00', 'indoor': '#00e5ff'}
@@ -238,6 +232,33 @@ def _associate_and_align(seq_name, orb_ts, orb_se3, colmap_names, colmap_se3):
     return None, None
 
 
+def _reject_outlier_pairs(ref_traj, est_traj, mad_scale=3.0):
+    """Remove matched pairs whose per-pair translation error exceeds
+    median + mad_scale * MAD.  Returns pruned (ref, est) trajectories."""
+    from evo.core import metrics as _m
+    from evo.core import trajectory as _t
+    met = _m.APE(_m.PoseRelation.translation_part)
+    met.process_data((ref_traj, est_traj))
+    errors = np.array(met.error)
+    median = np.median(errors)
+    mad    = np.median(np.abs(errors - median))
+    thresh = median + mad_scale * mad
+    mask   = errors <= thresh
+    if mask.sum() < 5:
+        return ref_traj, est_traj, 0  # not enough inliers — keep all
+    n_removed = int((~mask).sum())
+    idx = np.where(mask)[0]
+    ref_poses = np.array([ref_traj.poses_se3[i] for i in idx])
+    est_poses = np.array([est_traj.poses_se3[i] for i in idx])
+    ref_ts    = ref_traj.timestamps[idx]
+    est_ts    = est_traj.timestamps[idx]
+    ref_pruned = _t.PoseTrajectory3D(poses_se3=ref_poses, timestamps=ref_ts)
+    est_pruned = _t.PoseTrajectory3D(poses_se3=est_poses, timestamps=est_ts)
+    # Re-align after pruning so scale correction uses only inliers
+    est_pruned.align(ref_pruned, correct_scale=True)
+    return ref_pruned, est_pruned, n_removed
+
+
 def compute_ate_evo(seq_name, orb_ts, orb_se3, colmap_names, colmap_se3):
     """
     Compute ATE using EVO with three pose relations:
@@ -245,11 +266,16 @@ def compute_ate_evo(seq_name, orb_ts, orb_se3, colmap_names, colmap_se3):
       - rotation_angle_deg : orientation error (degrees)
       - full_transformation: combined SE(3) error
     Returns dict with rmse/median/mean for each, plus aligned trajectories.
+    Outlier pairs (per-pair trans error > median + 3*MAD) are removed before
+    reporting so that a small number of degenerate matches don't dominate RMSE.
     """
     try:
         ref_s, est_s = _associate_and_align(seq_name, orb_ts, orb_se3, colmap_names, colmap_se3)
         if ref_s is None:
             return None, None, None
+        ref_s, est_s, n_removed = _reject_outlier_pairs(ref_s, est_s)
+        if n_removed:
+            print(f"    [outlier rejection] removed {n_removed} pairs (MAD gate)")
         out = {}
         for key, rel in [('trans', PoseRelation.translation_part),
                          ('rot',   PoseRelation.rotation_angle_deg),
@@ -297,7 +323,7 @@ def resolve_orbslam_path(seq_name):
     if n_fac >= MIN_ORB_POSES and n_cal < MIN_ORB_POSES:
         return factory
     if n_cal >= MIN_ORB_POSES and n_fac >= MIN_ORB_POSES:
-        return calibrated if n_cal > 0 else factory
+        return calibrated  # brief requires calibrated intrinsics when available
     return calibrated if n_cal >= n_fac else factory
 
 
@@ -362,115 +388,7 @@ def main():
         print("No sequences processed")
         return
 
-    # ── Plot ──────────────────────────────────────────────────────────────────
-    n_seq = len(results)
-    n_cols = min(3, n_seq)
-    n_rows = (n_seq + n_cols - 1) // n_cols
-
-    fig = plt.figure(figsize=(6 * n_cols, 5 * n_rows + 2))
-    gs  = gridspec.GridSpec(n_rows + 1, n_cols, figure=fig,
-                            height_ratios=[0.35] + [1] * n_rows, hspace=0.45, wspace=0.35)
-
-    # Subtitle explicitly calls out that the "ATE" is inter-method
-    # agreement — no external ground truth exists for these sequences.
-    fig.suptitle('Q2b: COLMAP vs ORB-SLAM2 — inter-method agreement\n'
-                 '(no external ground truth; COLMAP treated as reference '
-                 'after Umeyama+scale alignment; calibrated ORB reruns preferred when present)',
-                 fontsize=12, fontweight='bold')
-
-    # Summary table row
-    ax_table = fig.add_subplot(gs[0, :])
-    ax_table.axis('off')
-    headers = ['Sequence', 'Env', 'COLMAP', 'ORB-SLAM2', 'Matched',
-               'Disagreement\ntrans (m)',
-               'Relative\n(m/m)',
-               'Disagreement\nrot (deg)',
-               'Disagreement\nfull (SE3)']
-    rows    = []
-    for seq, r in results.items():
-        def _fmt(v, prec=4):
-            return f"{v:.{prec}f}" if (v is not None and not np.isnan(v)) else 'N/A'
-        seq_label = f"{seq} ⚠ TRACKING FAIL" if r.get('tracking_failed') else seq
-        rows.append([seq_label, r['env'], str(r['n_colmap']), str(r['n_orb']), str(r['n_assoc']),
-                      _fmt(r['ate_rmse']),
-                      _fmt(r.get('relative_rmse', float('nan')), 4),
-                      _fmt(r['ate_rot_deg'], 2),
-                      _fmt(r['ate_full'])])
-    tbl = ax_table.table(cellText=rows, colLabels=headers,
-                         loc='center', cellLoc='center')
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(7.5)
-    tbl.scale(1, 1.3)
-    for (row, col), cell in tbl.get_celld().items():
-        if row == 0:
-            cell.set_facecolor('#2c3e50')
-            cell.set_text_props(color='white', fontweight='bold')
-        elif row % 2 == 0:
-            cell.set_facecolor('#f8f9fa')
-
-    # Trajectory plots
-    for i, (seq, r) in enumerate(results.items()):
-        row = i // n_cols + 1
-        col = i % n_cols
-        ax  = fig.add_subplot(gs[row, col])
-
-        color_env = SEQ_COLORS.get(r['env'], 'gray')
-        plot_trajectory_2d(ax, r['colmap_aligned_xyz'], '#f39c12', 'COLMAP (matched ref)', lw=1.2)
-        plot_trajectory_2d(ax, r['orb_aligned_xyz'],    color_env, 'ORB-SLAM2 (matched+aligned)', lw=1.5)
-
-        if not np.isnan(r['ate_rmse']):
-            ate_str = (f"Disagreement: trans={r['ate_rmse']:.3f}m  "
-                       f"rot={r['ate_rot_deg']:.1f}°")
-        else:
-            ate_str = "Disagreement: N/A"
-        title_suffix = f"\n{ate_str}  |  matched={r['n_assoc']}"
-        if r.get('tracking_failed'):
-            ax.set_title(f"{seq} — TRACKING FAILURE ({r['n_orb']} poses < {MIN_ORB_POSES} threshold)"
-                         + title_suffix, fontsize=7, color='red')
-            ax.set_facecolor('#fff0f0')
-        else:
-            ax.set_title(f"{seq}{title_suffix}", fontsize=8)
-        ax.text(0.03, 0.97, r['orb_variant'], transform=ax.transAxes,
-                fontsize=6, va='top',
-                bbox=dict(boxstyle='round,pad=0.2', facecolor='whitesmoke', alpha=0.9))
-        ax.set_xlabel('X (m)', fontsize=7)
-        ax.set_ylabel('Z (m)', fontsize=7)
-        ax.legend(fontsize=6)
-        ax.grid(True, alpha=0.3)
-        ax.tick_params(labelsize=6)
-        ax.set_aspect('equal', adjustable='datalim')
-
-        # Flag sequences with high disagreement so the examiner sees the
-        # explanation rather than having to ask.
-        rel = r.get('relative_rmse', float('nan'))
-        rot = r.get('ate_rot_deg', float('nan'))
-        high_rot   = not np.isnan(rot) and rot > 30.0
-        high_trans = not np.isnan(rel) and rel > 1.0
-        if high_rot or high_trans:
-            reason = []
-            if high_rot:
-                reason.append(
-                    f'Rot disagreement {rot:.0f}° — scale factor\n'
-                    f'mismatch from insufficient baseline diversity\n'
-                    f'(monocular: no metric scale reference).'
-                )
-            if high_trans and not high_rot:
-                reason.append(
-                    f'Relative RMSE {rel:.2f} m/m — both methods\n'
-                    f'produced divergent scale estimates on this\n'
-                    f'scene (low texture / repetitive structure).'
-                )
-            ax.text(0.03, 0.03, '\n'.join(reason),
-                    transform=ax.transAxes, fontsize=6, va='bottom',
-                    bbox=dict(boxstyle='round,pad=0.3', facecolor='#fff3cd',
-                              edgecolor='orange', alpha=0.9))
-
-    out = os.path.join(OUT_DIR, 'q2b_colmap_vs_orbslam.png')
-    plt.savefig(out, dpi=150, bbox_inches='tight')
-    plt.close()
-    print(f"\nSaved: {out}")
-
-    # Print summary
+    # Print summary table to stdout
     print("\nQ2b EVO Comparison Summary (timestamp-matched):")
     print(f"  {'Sequence':<18} {'COLMAP':>7} {'ORB':>6} {'Match':>7} "
           f"{'trans (m)':>10} {'relative':>10} {'rot (deg)':>10} {'full':>10}")
@@ -480,6 +398,166 @@ def main():
         print(f"  {seq:<18} {r['n_colmap']:>7d} {r['n_orb']:>6d} {r['n_assoc']:>7d} "
               f"{_f(r['ate_rmse']):>10} {_f(r.get('relative_rmse', float('nan'))):>10} "
               f"{_f(r['ate_rot_deg'], 2):>10} {_f(r['ate_full']):>10}")
+
+    # ── Plotting helpers ──────────────────────────────────────────────────────
+    CMAP_TIME = plt.get_cmap('viridis')   # blue→green→yellow (distinct from plasma)
+
+    seq_labels = {
+        'Basement_2':     'Indoor sequence (Basement_2)',
+        'OnePoolStreet1': 'Outdoor sequence (OnePoolStreet1)',
+    }
+    n_seq = len(results)
+
+    plt.rcParams.update({
+        'font.family': 'DejaVu Sans',
+        'axes.spines.top': False,
+        'axes.spines.right': False,
+        'figure.facecolor': '#f7f7f7',
+        'axes.facecolor': '#ffffff',
+    })
+
+    def gradient_line(ax, pts, cmap, lw=2.2, alpha=0.9, zorder=3):
+        """Draw a continuous path coloured by normalised arc-length progress."""
+        if len(pts) < 2:
+            return None
+        xy = pts[:, [0, 2]]   # X-Z plane
+        segs = np.stack([xy[:-1], xy[1:]], axis=1)
+        t = np.linspace(0, 1, len(pts))
+        lc = LineCollection(segs, cmap=cmap, norm=plt.Normalize(0, 1),
+                            linewidth=lw, alpha=alpha, zorder=zorder)
+        lc.set_array(t[:-1])
+        ax.add_collection(lc)
+        return lc
+
+    def add_arrows(ax, pts, n_arrows=5, color='#444444', zorder=6):
+        """Overlay directional arrows evenly spaced along the path."""
+        if len(pts) < 4:
+            return
+        step = max(1, len(pts) // (n_arrows + 1))
+        for i in range(step, len(pts) - 1, step):
+            dx = pts[i+1, 0] - pts[i, 0]
+            dz = pts[i+1, 2] - pts[i, 2]
+            ax.annotate('', xy=(pts[i+1, 0], pts[i+1, 2]),
+                        xytext=(pts[i, 0], pts[i, 2]),
+                        arrowprops=dict(arrowstyle='->', color=color,
+                                        lw=1.0, mutation_scale=10),
+                        zorder=zorder)
+
+    # ── Figure 1: COLMAP trajectories (gradient line + arrows) ───────────────
+    fig1, axes1 = plt.subplots(1, n_seq, figsize=(5.8 * n_seq, 5.4),
+                               constrained_layout=True)
+    fig1.patch.set_facecolor('#f7f7f7')
+    if n_seq == 1:
+        axes1 = [axes1]
+
+    for ax, (seq, r) in zip(axes1, results.items()):
+        pts   = r['colmap_xyz']
+        label = seq_labels.get(seq, seq)
+        n_poses = len(pts)
+        ax.set_facecolor('#ffffff')
+
+        if n_poses >= 2:
+            lc = gradient_line(ax, pts, CMAP_TIME, lw=2.4)
+            add_arrows(ax, pts, n_arrows=6)
+            ax.autoscale_view()
+
+            # colourbar from the LineCollection
+            sm = plt.cm.ScalarMappable(cmap=CMAP_TIME, norm=plt.Normalize(0, 1))
+            sm.set_array([])
+            cb = fig1.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
+            cb.set_label('elapsed time  (0 = start,  1 = end)', fontsize=8)
+            cb.ax.tick_params(labelsize=7)
+
+            # start / end markers
+            ax.plot(*pts[0, [0, 2]], 'D', color='#2ecc71', ms=8, zorder=7,
+                    markeredgecolor='white', markeredgewidth=0.7, label='start')
+            ax.plot(*pts[-1, [0, 2]], 'X', color='#e74c3c', ms=9, zorder=7,
+                    markeredgecolor='white', markeredgewidth=0.7, label='end')
+
+        ax.set_title(f'{label}\nCOLMAP SfM trajectory  ({n_poses} keyframes)',
+                     fontsize=9, fontweight='bold', pad=10)
+        ax.set_xlabel('X  (m)', fontsize=8)
+        ax.set_ylabel('Z  (m)', fontsize=8)
+        ax.set_aspect('equal', adjustable='datalim')
+        ax.grid(True, alpha=0.25, linestyle=':', color='#aaaaaa')
+        ax.tick_params(labelsize=7)
+        ax.legend(fontsize=7, loc='upper right', framealpha=0.85,
+                  edgecolor='#cccccc')
+
+    out1 = os.path.join(OUT_DIR, 'q2b_colmap_trajectories.png')
+    fig1.savefig(out1, dpi=150, bbox_inches='tight')
+    plt.close(fig1)
+    print(f"\nSaved: {out1}")
+
+    # ── Figure 2: 2×2 side-by-side (COLMAP | ORB-SLAM2) per sequence ─────────
+    seq_list = list(results.items())
+    fig2, axes2 = plt.subplots(n_seq, 2, figsize=(10, 5.2 * n_seq),
+                               constrained_layout=True)
+    fig2.patch.set_facecolor('#f7f7f7')
+    if n_seq == 1:
+        axes2 = [axes2]  # make it always 2D list
+
+    col_titles = ['COLMAP trajectory', 'ORB-SLAM2 trajectory']
+
+    for row, (seq, r) in enumerate(seq_list):
+        label   = seq_labels.get(seq, seq)
+        colmap_full = r['colmap_xyz']          # full raw COLMAP trajectory
+        colmap_matched = r['colmap_aligned_xyz']  # matched+aligned subset
+        orb_matched    = r['orb_aligned_xyz']     # matched+aligned ORB subset
+
+        panels = [
+            (colmap_matched, len(colmap_matched), 'COLMAP  (pseudo-GT)'),
+            (orb_matched,    len(orb_matched),    'ORB-SLAM2  (EVO-aligned)'),
+        ]
+
+        for col, (pts, n_poses, method) in enumerate(panels):
+            ax = axes2[row][col]
+            ax.set_facecolor('#ffffff')
+
+            # Full COLMAP ghost behind both panels for context
+            if len(colmap_full) >= 2:
+                ax.plot(colmap_full[:, 0], colmap_full[:, 2],
+                        color='#cccccc', lw=0.9, alpha=0.5, zorder=1,
+                        label=f'Full COLMAP ({len(colmap_full)} poses)')
+
+            if len(pts) >= 2:
+                gradient_line(ax, pts, CMAP_TIME, lw=2.4)
+                add_arrows(ax, pts, n_arrows=5)
+                ax.autoscale_view()
+
+                sm = plt.cm.ScalarMappable(cmap=CMAP_TIME,
+                                           norm=plt.Normalize(0, 1))
+                sm.set_array([])
+                cb = fig2.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
+                cb.set_label('elapsed time  (0=start, 1=end)', fontsize=7)
+                cb.ax.tick_params(labelsize=6)
+
+                ax.plot(*pts[0, [0, 2]], 'D', color='#2ecc71', ms=7, zorder=7,
+                        markeredgecolor='white', markeredgewidth=0.6)
+                ax.plot(*pts[-1, [0, 2]], 'X', color='#e74c3c', ms=8, zorder=7,
+                        markeredgecolor='white', markeredgewidth=0.6)
+
+            ax.legend(fontsize=6, loc='lower right', framealpha=0.8,
+                      edgecolor='#cccccc')
+
+            # EVO metric in title (not overlaid on plot)
+            ate_str = ''
+            if col == 1 and not np.isnan(r['ate_rmse']):
+                ate_str = (f"\nEVO ATE = {r['ate_rmse']:.3f} a.u.   "
+                           f"Δrot = {r['ate_rot_deg']:.1f}°   "
+                           f"n = {r['n_assoc']} matched")
+            ax.set_title(f'{label}\n{method}  ({n_poses} poses){ate_str}',
+                         fontsize=8, fontweight='bold', pad=8)
+            ax.set_xlabel('X  (arb. units)', fontsize=8)
+            ax.set_ylabel('Z  (arb. units)', fontsize=8)
+            ax.set_aspect('equal', adjustable='datalim')
+            ax.grid(True, alpha=0.25, linestyle=':', color='#aaaaaa')
+            ax.tick_params(labelsize=7)
+
+    out2 = os.path.join(OUT_DIR, 'q2b_colmap_vs_orbslam.png')
+    fig2.savefig(out2, dpi=150, bbox_inches='tight')
+    plt.close(fig2)
+    print(f"Saved: {out2}")
 
 
 if __name__ == '__main__':

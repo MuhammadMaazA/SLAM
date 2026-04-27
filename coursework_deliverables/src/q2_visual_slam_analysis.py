@@ -19,7 +19,7 @@ _ROOT    = os.path.abspath(os.path.join(_HERE, '..'))
 BASE     = os.environ.get('SLAM_DATA', os.path.join(_ROOT, 'data'))
 ORB_DIR  = os.path.join(BASE, 'q2_results', 'orbslam_runs')
 COLMAP_DIR = os.path.join(BASE, 'q2_results', 'colmap_runs')
-OUT_DIR  = os.path.join(BASE, 'q2_results')
+OUT_DIR  = os.path.abspath(os.path.join(_ROOT, '..', 'plots'))
 os.makedirs(OUT_DIR, exist_ok=True)
 
 REC1 = os.environ.get('SLAM_REC1', os.path.join(os.path.expanduser('~'), 'SLAM', 'extracted_data', 'tmp_recordings', 'tmp_recordings'))

@@ -3774,7 +3774,7 @@
       "norm_label": "intel realsense d455 rgb-d camera"
     },
     {
-      "label": "RPLidar A1 LiDAR Sensor",
+      "label": "RPLidar A2M12 LiDAR Sensor",
       "file_type": "concept",
       "source_file": "coursework_deliverables/SUBMISSION_README.md",
       "source_location": null,

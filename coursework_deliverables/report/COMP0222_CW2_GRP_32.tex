@@ -50,8 +50,9 @@ closure errors.  Key findings: (i) ORB-SLAM2 requires $\geq$1000 ORB features
 on KITTI07 due to a 100-inlier RANSAC threshold irrecoverable at 10 fps vehicle
 speed; (ii) COLMAP-calibrated intrinsics improve ORB-SLAM2 on custom indoor
 sequences by up to $\sim$10\%; (iii) ICP with Huber-reweighted point-to-plane
-and GTSAM factor-graph optimisation reduces trajectory closure error by
-15--62\% on indoor sequences.
+closes the indoor LiDAR trajectories to below 0.2\,m before pose-graph
+optimisation, while the submitted GTSAM run reduces graph cost but slightly
+worsens endpoint closure, revealing loop/odometry weighting tension.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Q1: Visual SLAM with Datasets}
@@ -182,8 +183,8 @@ evaluating any DBoW2 place-recognition candidates.
 \toprule
 Dataset & With loop & No loop & $\Delta$\\
 \midrule
-KITTI 07       & 4.39\,m & 5.11\,m & \textcolor{red}{$+16\%$}\\
-TUM long office & 0.032\,m & 0.038\,m & \textcolor{red}{$+19\%$}\\
+KITTI 07       & 4.39\,m & 18.02\,m & \textcolor{red}{$+310\%$}\\
+TUM long office & 0.032\,m & 0.049\,m & \textcolor{red}{$+54\%$}\\
 \bottomrule
 \end{tabular}
 \caption{Q1d: ATE with loop closure disabled.}
@@ -191,11 +192,12 @@ TUM long office & 0.032\,m & 0.038\,m & \textcolor{red}{$+19\%$}\\
 \end{table}
 
 KITTI 07 contains one prominent loop (the figure-8 segment near the end);
-disabling loop closure increases ATE by 16\%.  TUM's office sequence
-is a partial loop: removing closure correction causes a modest 19\% ATE
-increase.  The effect is smaller than outlier rejection because TUM is
-short enough that drift without closure is not severe.  Figure~\ref{fig:q1d}
-shows how the uncorrected trajectory diverges from the corrected path.
+disabling loop closure increases ATE by 310\%, from 4.39\,m to
+18.02\,m, because the accumulated heading drift is never redistributed
+over the full 695\,m path.  TUM's office sequence is much shorter, so
+removing closure correction causes a smaller but still measurable 54\%
+ATE increase.  Figure~\ref{fig:q1d} shows how the uncorrected trajectory
+diverges from the corrected path.
 
 \begin{figure}[H]
   \centering
@@ -351,7 +353,7 @@ isometric views) illustrating the hallway-and-room layout accurately.
 
 \subsection{Q3a — Data Collection}
 
-We use an RPLidar A1 (360$^\circ$, 10\,Hz, 12\,m rated range) to record
+We use an RPLidar A2M12 (360$^\circ$, roughly 10--12\,Hz in our logs, 12\,m rated range) to record
 LiDAR scans synchronised with the RealSense camera.  Three sequences were
 selected:
 
@@ -511,9 +513,8 @@ threshold correctly separates false positives from true revisits.
 Accepted loop closures and consecutive-keyframe odometry are assembled into
 a GTSAM Pose2 factor graph.  Odometry edges carry per-edge information
 matrices derived from the ICP Hessian (scaled by inlier count); loop-closure
-edges carry their own ICP Hessian propagated through detection (correcting
-the prior bug where all loop edges used a fixed sigma regardless of match
-quality).  Pose-0 is anchored with a tight Gaussian prior ($\sigma =
+edges carry ICP-derived information but remain too strong relative to the
+odometry chain in the submitted run.  Pose-0 is anchored with a tight Gaussian prior ($\sigma =
 10^{-4}$\,m).  Optimisation uses GTSAM Levenberg-Marquardt
 (200 iterations, relative tolerance $10^{-8}$).
 
@@ -521,23 +522,24 @@ quality).  Pose-0 is anchored with a tight Gaussian prior ($\sigma =
 \centering\small
 \begin{tabular}{lrrr}
 \toprule
-Sequence & Before & After & Reduction\\
+Sequence & Cost $i \to f$ & Closure $i$ & Closure $f$\\
 \midrule
-Floor7\_Hallway & 0.163\,m & 0.061\,m & $\mathbf{-62\%}$\\
-Basement\_1     & 0.194\,m & 0.165\,m & $-15\%$\\
-Outdoor\_1      & 0.941\,m & 0.886\,m & $-6\%$\\
+Floor7\_Hallway & 69762 $\to$ 2752 & 0.166\,m & 0.221\,m\\
+Basement\_1     & 61253 $\to$ 7349 & 0.170\,m & 0.204\,m\\
+Outdoor\_1      & 0 $\to$ 0        & 8.084\,m & 8.084\,m\\
 \bottomrule
 \end{tabular}
-\caption{Q3d: Closure error before and after factor-graph optimisation.}
+\caption{Q3d: Graph cost and closure error before and after factor-graph optimisation.}
 \label{tab:q3d}
 \end{table}
 
-Floor7\_Hallway benefits most (62\% reduction) because the large-area
-corridor layout provides spatially separated loop revisits that strongly
-constrain the drift direction.  Basement\_1 improves by 15\%; the small
-reduction is expected since the loop geometry is less over-determined.
-Outdoor\_1 sees 6\% improvement; sparse geometry makes ICP loop-closure
-estimates noisier.
+On Basement\_1 and Floor7\_Hallway the optimiser reduces the total graph
+cost substantially, but the endpoint closure error worsens.  This is not a
+contradiction: GTSAM minimises the weighted sum of all factor residuals, while
+the closure metric is only one derived start-to-end distance.  The submitted
+loop weights remain too strong relative to odometry, so the solver finds a
+lower-cost compromise that degrades the visible closure and occupancy grid.
+Outdoor\_1 has no accepted loops, so odometry-only PGO leaves it unchanged.
 
 \begin{figure}[H]
   \centering
